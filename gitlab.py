@@ -1,12 +1,12 @@
 """
-title: GitLab (Self-hosted) Projects / Issues / Merge Requests / Repo Browsing + Writes + CI Control
+title: GitLab (Self-hosted) Projects / Issues / Merge Requests / Repo Browsing + Writes + CI Control + Wiki
 author: René Vögeli
 author_url: https://github.com/LordOfTheRats
 git_url: https://github.com/LordOfTheRats/open-webui-gitlab-tool
-description: Access GitLab projects and work with issues, merge requests, repository files, diffs, and CI pipelines from Open WebUI. Includes optional repository write operations and CI pipeline controls. Supports compact output mode, helper lookup endpoints (labels/milestones/users/members), and basic retry/rate-limit handling.
+description: Access GitLab projects and work with issues, merge requests, repository files, diffs, CI pipelines, and wiki pages from Open WebUI. Includes optional repository write operations, CI pipeline controls, and wiki page CRUD operations. Supports compact output mode, helper lookup endpoints (labels/milestones/users/members), and basic retry/rate-limit handling.
 required_open_webui_version: 0.4.0
 requirements: httpx
-version: 1.8.0
+version: 1.9.0
 licence: MIT
 """
 
@@ -288,6 +288,16 @@ class Tools:
                 "updated_at": obj.get("updated_at"),
                 "system": obj.get("system"),
                 "type": obj.get("type"),
+            }
+
+        if kind == "wiki":
+            # NOTE: In compact mode we STILL include content (it's the core of a wiki page).
+            return {
+                "slug": obj.get("slug"),
+                "title": obj.get("title"),
+                "content": obj.get("content"),
+                "format": obj.get("format"),
+                "encoding": obj.get("encoding"),
             }
 
         return obj
@@ -1834,3 +1844,141 @@ class Tools:
         pid = self._project_id_or_path(project)
         data = await self._request("POST", f"/projects/{pid}/jobs/{job_id}/cancel")
         return self._maybe_compact("job", data, compact)
+
+    # ----------------------------
+    # Wiki Operations
+    # ----------------------------
+
+    async def gitlab_list_wiki_pages(
+        self,
+        project: ProjectRef,
+        with_content: bool = False,
+        offset: int = 0,
+        page_count: int = 1,
+        compact: Optional[bool] = None,
+    ) -> list[Json]:
+        """
+        List wiki pages for a project.
+
+        Args:
+          project: Numeric project ID or "group/subgroup/project" path.
+          with_content: If true, returns full page content (may be large for many pages).
+          offset: Page offset (0-based).
+          page_count: Number of pages to fetch starting from offset.
+          compact: If true, tool returns a reduced field set.
+        """
+        pid = self._project_id_or_path(project)
+        params: dict[str, Any] = {"with_content": with_content}
+        data = await self._paginate(
+            f"/projects/{pid}/wikis",
+            params=params,
+            offset=offset,
+            page_count=page_count,
+        )
+        return self._maybe_compact("wiki", data, compact)
+
+    async def gitlab_get_wiki_page(
+        self,
+        project: ProjectRef,
+        slug: str,
+        version: Optional[str] = None,
+        render_html: bool = False,
+        compact: Optional[bool] = None,
+    ) -> Json:
+        """
+        Get a single wiki page by slug.
+
+        Args:
+          project: Numeric project ID or "group/subgroup/project" path.
+          slug: Wiki page slug (URL-friendly identifier).
+          version: Optional version ID to retrieve a specific version.
+          render_html: If true, returns content rendered as HTML (GitLab API feature).
+          compact: If true, tool returns a reduced field set (still includes content).
+        """
+        pid = self._project_id_or_path(project)
+        encoded_slug = self._encode_path(slug)
+        params: dict[str, Any] = {"render_html": render_html}
+        if version is not None:
+            params["version"] = version
+        data = await self._request(
+            "GET", f"/projects/{pid}/wikis/{encoded_slug}", params=params
+        )
+        return self._maybe_compact("wiki", data, compact)
+
+    async def gitlab_create_wiki_page(
+        self,
+        project: ProjectRef,
+        title: str,
+        content: str,
+        format: Literal["markdown", "rdoc", "asciidoc", "org"] = "markdown",
+        compact: Optional[bool] = None,
+    ) -> Json:
+        """
+        Create a new wiki page.
+
+        Args:
+          project: Numeric project ID or "group/subgroup/project" path.
+          title: Wiki page title (will be converted to slug automatically by GitLab).
+          content: Wiki page content.
+          format: Content format: "markdown" | "rdoc" | "asciidoc" | "org" (default: "markdown").
+          compact: If true, tool returns a reduced field set (still includes content).
+        """
+        pid = self._project_id_or_path(project)
+        payload: dict[str, Any] = {
+            "title": title,
+            "content": content,
+            "format": format,
+        }
+        data = await self._request("POST", f"/projects/{pid}/wikis", json=payload)
+        return self._maybe_compact("wiki", data, compact)
+
+    async def gitlab_update_wiki_page(
+        self,
+        project: ProjectRef,
+        slug: str,
+        title: Optional[str] = None,
+        content: Optional[str] = None,
+        format: Optional[Literal["markdown", "rdoc", "asciidoc", "org"]] = None,
+        compact: Optional[bool] = None,
+    ) -> Json:
+        """
+        Update an existing wiki page.
+
+        Args:
+          project: Numeric project ID or "group/subgroup/project" path.
+          slug: Wiki page slug (URL-friendly identifier).
+          title: New title (or None to keep existing).
+          content: New content (or None to keep existing).
+          format: Content format: "markdown" | "rdoc" | "asciidoc" | "org" (or None to keep existing).
+          compact: If true, tool returns a reduced field set (still includes content).
+        """
+        pid = self._project_id_or_path(project)
+        encoded_slug = self._encode_path(slug)
+        payload: dict[str, Any] = {}
+        if title is not None:
+            payload["title"] = title
+        if content is not None:
+            payload["content"] = content
+        if format is not None:
+            payload["format"] = format
+
+        data = await self._request(
+            "PUT",
+            f"/projects/{pid}/wikis/{encoded_slug}",
+            json=payload if payload else None,
+        )
+        return self._maybe_compact("wiki", data, compact)
+
+    async def gitlab_delete_wiki_page(
+        self, project: ProjectRef, slug: str
+    ) -> Json:
+        """
+        Delete a wiki page.
+
+        Args:
+          project: Numeric project ID or "group/subgroup/project" path.
+          slug: Wiki page slug (URL-friendly identifier).
+        """
+        pid = self._project_id_or_path(project)
+        encoded_slug = self._encode_path(slug)
+        return await self._request("DELETE", f"/projects/{pid}/wikis/{encoded_slug}")
