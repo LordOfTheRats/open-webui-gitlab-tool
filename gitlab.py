@@ -26,6 +26,209 @@ ProjectRef = Union[int, str]  # int project_id OR "group/subgroup/project" path
 GroupRef = Union[int, str]  # int group_id OR "group/subgroup" full path
 
 
+# ----------------------------
+# Module-level helper functions
+# ----------------------------
+
+
+def _encode_path(value: str) -> str:
+    """
+    Encode a path-like string so slashes become %2F (required by GitLab).
+    """
+    return quote_plus(value, safe="").replace("+", "%20")
+
+
+def _project_id_or_path(project: ProjectRef) -> str:
+    """
+    GitLab endpoints use /projects/:id where :id can be numeric ID or URL-encoded path.
+    """
+    if isinstance(project, int):
+        return str(project)
+    return _encode_path(project)
+
+
+def _group_id_or_path(group: GroupRef) -> str:
+    """
+    GitLab group endpoints use /groups/:id where :id can be numeric ID or URL-encoded full path.
+    """
+    if isinstance(group, int):
+        return str(group)
+    return _encode_path(group)
+
+
+def _user_brief(u: Any) -> Optional[Json]:
+    if not isinstance(u, dict):
+        return None
+    return {
+        "id": u.get("id"),
+        "username": u.get("username"),
+        "name": u.get("name"),
+        "web_url": u.get("web_url"),
+    }
+
+
+def _compact_one(kind: str, obj: Any) -> Any:
+    if not isinstance(obj, dict):
+        return obj
+
+    if kind == "project":
+        return {
+            "id": obj.get("id"),
+            "name": obj.get("name"),
+            "path_with_namespace": obj.get("path_with_namespace"),
+            "description": obj.get("description"),
+            "visibility": obj.get("visibility"),
+            "archived": obj.get("archived"),
+            "default_branch": obj.get("default_branch"),
+            "last_activity_at": obj.get("last_activity_at"),
+            "web_url": obj.get("web_url"),
+        }
+
+    if kind == "issue":
+        # NOTE: In compact mode we STILL include description (it's core context).
+        return {
+            "id": obj.get("id"),
+            "iid": obj.get("iid"),
+            "title": obj.get("title"),
+            "description": obj.get("description"),
+            "state": obj.get("state"),
+            "labels": obj.get("labels"),
+            "author": _user_brief(obj.get("author")),
+            "assignee": (
+                _user_brief(obj.get("assignee"))
+                if isinstance(obj.get("assignee"), dict)
+                else None
+            ),
+            "assignees": [
+                _user_brief(a) for a in (obj.get("assignees") or [])
+            ],
+            "milestone": (
+                (obj.get("milestone") or {}).get("title")
+                if isinstance(obj.get("milestone"), dict)
+                else None
+            ),
+            "time_stats": obj.get("time_stats"),
+            "created_at": obj.get("created_at"),
+            "updated_at": obj.get("updated_at"),
+            "due_date": obj.get("due_date"),
+            "web_url": obj.get("web_url"),
+        }
+
+    if kind == "mr":
+        # NOTE: In compact mode we STILL include description (it's core context).
+        return {
+            "id": obj.get("id"),
+            "iid": obj.get("iid"),
+            "title": obj.get("title"),
+            "description": obj.get("description"),
+            "state": obj.get("state"),
+            "source_branch": obj.get("source_branch"),
+            "target_branch": obj.get("target_branch"),
+            "author": _user_brief(obj.get("author")),
+            "assignees": [
+                _user_brief(a) for a in (obj.get("assignees") or [])
+            ],
+            "reviewers": (
+                [_user_brief(a) for a in (obj.get("reviewers") or [])]
+                if isinstance(obj.get("reviewers"), list)
+                else None
+            ),
+            "created_at": obj.get("created_at"),
+            "updated_at": obj.get("updated_at"),
+            "merged_at": obj.get("merged_at"),
+            "web_url": obj.get("web_url"),
+        }
+
+    if kind == "pipeline":
+        return {
+            "id": obj.get("id"),
+            "iid": obj.get("iid"),
+            "status": obj.get("status"),
+            "ref": obj.get("ref"),
+            "sha": obj.get("sha"),
+            "created_at": obj.get("created_at"),
+            "updated_at": obj.get("updated_at"),
+            "web_url": obj.get("web_url"),
+        }
+
+    if kind == "job":
+        return {
+            "id": obj.get("id"),
+            "name": obj.get("name"),
+            "stage": obj.get("stage"),
+            "status": obj.get("status"),
+            "ref": obj.get("ref"),
+            "created_at": obj.get("created_at"),
+            "started_at": obj.get("started_at"),
+            "finished_at": obj.get("finished_at"),
+            "web_url": obj.get("web_url"),
+        }
+
+    if kind == "label":
+        return {
+            "id": obj.get("id"),
+            "name": obj.get("name"),
+            "description": obj.get("description"),
+            "color": obj.get("color"),
+            "text_color": obj.get("text_color"),
+        }
+
+    if kind == "milestone":
+        return {
+            "id": obj.get("id"),
+            "iid": obj.get("iid"),
+            "title": obj.get("title"),
+            "description": obj.get("description"),
+            "state": obj.get("state"),
+            "due_date": obj.get("due_date"),
+            "start_date": obj.get("start_date"),
+            "web_url": obj.get("web_url"),
+        }
+
+    if kind == "member":
+        return {
+            "id": obj.get("id"),
+            "username": obj.get("username"),
+            "name": obj.get("name"),
+            "state": obj.get("state"),
+            "access_level": obj.get("access_level"),
+            "web_url": obj.get("web_url"),
+        }
+
+    if kind == "user":
+        return {
+            "id": obj.get("id"),
+            "username": obj.get("username"),
+            "name": obj.get("name"),
+            "state": obj.get("state"),
+            "web_url": obj.get("web_url"),
+        }
+
+    if kind == "note":
+        # NOTE: In compact mode we STILL include body (it's the core of a comment).
+        return {
+            "id": obj.get("id"),
+            "body": obj.get("body"),
+            "author": _user_brief(obj.get("author")),
+            "created_at": obj.get("created_at"),
+            "updated_at": obj.get("updated_at"),
+            "system": obj.get("system"),
+            "type": obj.get("type"),
+        }
+
+    if kind == "wiki":
+        # NOTE: In compact mode we STILL include content (it's the core of a wiki page).
+        return {
+            "slug": obj.get("slug"),
+            "title": obj.get("title"),
+            "content": obj.get("content"),
+            "format": obj.get("format"),
+            "encoding": obj.get("encoding"),
+        }
+
+    return obj
+
+
 class Tools:
     """
     Open WebUI Toolkit for GitLab.
@@ -86,7 +289,7 @@ class Tools:
         )
 
     # ----------------------------
-    # Internal helpers
+    # Internal helpers (valves-dependent)
     # ----------------------------
 
     def _api_base(self) -> str:
@@ -100,28 +303,6 @@ class Tools:
 
         return {"PRIVATE-TOKEN": self.valves.token, "Content-Type": "application/json"}
 
-    def _encode_path(self, value: str) -> str:
-        """
-        Encode a path-like string so slashes become %2F (required by GitLab).
-        """
-        return quote_plus(value, safe="").replace("+", "%20")
-
-    def _project_id_or_path(self, project: ProjectRef) -> str:
-        """
-        GitLab endpoints use /projects/:id where :id can be numeric ID or URL-encoded path.
-        """
-        if isinstance(project, int):
-            return str(project)
-        return self._encode_path(project)
-
-    def _group_id_or_path(self, group: GroupRef) -> str:
-        """
-        GitLab group endpoints use /groups/:id where :id can be numeric ID or URL-encoded full path.
-        """
-        if isinstance(group, int):
-            return str(group)
-        return self._encode_path(group)
-
     def _ensure_writes_allowed(self) -> None:
         if not self.valves.allow_repo_writes:
             raise PermissionError(
@@ -131,183 +312,12 @@ class Tools:
     def _want_compact(self, compact: Optional[bool]) -> bool:
         return self.valves.compact_results_default if compact is None else bool(compact)
 
-    def _user_brief(self, u: Any) -> Optional[Json]:
-        if not isinstance(u, dict):
-            return None
-        return {
-            "id": u.get("id"),
-            "username": u.get("username"),
-            "name": u.get("name"),
-            "web_url": u.get("web_url"),
-        }
-
-    def _compact_one(self, kind: str, obj: Any) -> Any:
-        if not isinstance(obj, dict):
-            return obj
-
-        if kind == "project":
-            return {
-                "id": obj.get("id"),
-                "name": obj.get("name"),
-                "path_with_namespace": obj.get("path_with_namespace"),
-                "description": obj.get("description"),
-                "visibility": obj.get("visibility"),
-                "archived": obj.get("archived"),
-                "default_branch": obj.get("default_branch"),
-                "last_activity_at": obj.get("last_activity_at"),
-                "web_url": obj.get("web_url"),
-            }
-
-        if kind == "issue":
-            # NOTE: In compact mode we STILL include description (it's core context).
-            return {
-                "id": obj.get("id"),
-                "iid": obj.get("iid"),
-                "title": obj.get("title"),
-                "description": obj.get("description"),
-                "state": obj.get("state"),
-                "labels": obj.get("labels"),
-                "author": self._user_brief(obj.get("author")),
-                "assignee": (
-                    self._user_brief(obj.get("assignee"))
-                    if isinstance(obj.get("assignee"), dict)
-                    else None
-                ),
-                "assignees": [
-                    self._user_brief(a) for a in (obj.get("assignees") or [])
-                ],
-                "milestone": (
-                    (obj.get("milestone") or {}).get("title")
-                    if isinstance(obj.get("milestone"), dict)
-                    else None
-                ),
-                "time_stats": obj.get("time_stats"),
-                "created_at": obj.get("created_at"),
-                "updated_at": obj.get("updated_at"),
-                "due_date": obj.get("due_date"),
-                "web_url": obj.get("web_url"),
-            }
-
-        if kind == "mr":
-            # NOTE: In compact mode we STILL include description (it's core context).
-            return {
-                "id": obj.get("id"),
-                "iid": obj.get("iid"),
-                "title": obj.get("title"),
-                "description": obj.get("description"),
-                "state": obj.get("state"),
-                "source_branch": obj.get("source_branch"),
-                "target_branch": obj.get("target_branch"),
-                "author": self._user_brief(obj.get("author")),
-                "assignees": [
-                    self._user_brief(a) for a in (obj.get("assignees") or [])
-                ],
-                "reviewers": (
-                    [self._user_brief(a) for a in (obj.get("reviewers") or [])]
-                    if isinstance(obj.get("reviewers"), list)
-                    else None
-                ),
-                "created_at": obj.get("created_at"),
-                "updated_at": obj.get("updated_at"),
-                "merged_at": obj.get("merged_at"),
-                "web_url": obj.get("web_url"),
-            }
-
-        if kind == "pipeline":
-            return {
-                "id": obj.get("id"),
-                "iid": obj.get("iid"),
-                "status": obj.get("status"),
-                "ref": obj.get("ref"),
-                "sha": obj.get("sha"),
-                "created_at": obj.get("created_at"),
-                "updated_at": obj.get("updated_at"),
-                "web_url": obj.get("web_url"),
-            }
-
-        if kind == "job":
-            return {
-                "id": obj.get("id"),
-                "name": obj.get("name"),
-                "stage": obj.get("stage"),
-                "status": obj.get("status"),
-                "ref": obj.get("ref"),
-                "created_at": obj.get("created_at"),
-                "started_at": obj.get("started_at"),
-                "finished_at": obj.get("finished_at"),
-                "web_url": obj.get("web_url"),
-            }
-
-        if kind == "label":
-            return {
-                "id": obj.get("id"),
-                "name": obj.get("name"),
-                "description": obj.get("description"),
-                "color": obj.get("color"),
-                "text_color": obj.get("text_color"),
-            }
-
-        if kind == "milestone":
-            return {
-                "id": obj.get("id"),
-                "iid": obj.get("iid"),
-                "title": obj.get("title"),
-                "description": obj.get("description"),
-                "state": obj.get("state"),
-                "due_date": obj.get("due_date"),
-                "start_date": obj.get("start_date"),
-                "web_url": obj.get("web_url"),
-            }
-
-        if kind == "member":
-            return {
-                "id": obj.get("id"),
-                "username": obj.get("username"),
-                "name": obj.get("name"),
-                "state": obj.get("state"),
-                "access_level": obj.get("access_level"),
-                "web_url": obj.get("web_url"),
-            }
-
-        if kind == "user":
-            return {
-                "id": obj.get("id"),
-                "username": obj.get("username"),
-                "name": obj.get("name"),
-                "state": obj.get("state"),
-                "web_url": obj.get("web_url"),
-            }
-
-        if kind == "note":
-            # NOTE: In compact mode we STILL include body (it's the core of a comment).
-            return {
-                "id": obj.get("id"),
-                "body": obj.get("body"),
-                "author": self._user_brief(obj.get("author")),
-                "created_at": obj.get("created_at"),
-                "updated_at": obj.get("updated_at"),
-                "system": obj.get("system"),
-                "type": obj.get("type"),
-            }
-
-        if kind == "wiki":
-            # NOTE: In compact mode we STILL include content (it's the core of a wiki page).
-            return {
-                "slug": obj.get("slug"),
-                "title": obj.get("title"),
-                "content": obj.get("content"),
-                "format": obj.get("format"),
-                "encoding": obj.get("encoding"),
-            }
-
-        return obj
-
     def _maybe_compact(self, kind: str, data: Any, compact: Optional[bool]) -> Any:
         if not self._want_compact(compact):
             return data
         if isinstance(data, list):
-            return [self._compact_one(kind, x) for x in data]
-        return self._compact_one(kind, data)
+            return [_compact_one(kind, x) for x in data]
+        return _compact_one(kind, data)
 
     def _compute_delay(
         self, attempt: int, retry_after: Optional[float] = None
@@ -491,7 +501,7 @@ class Tools:
           project: Numeric project ID or "group/subgroup/project" path.
           compact: If true, tool returns a reduced field set.
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         data = await self._request("GET", f"/projects/{pid}")
         return self._maybe_compact("project", data, compact)
 
@@ -519,7 +529,7 @@ class Tools:
           page_count: Number of pages to fetch starting from offset.
           compact: If true, tool returns a reduced field set.
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         params: dict[str, Any] = {
             "with_counts": False,
             "include_ancestor_groups": include_ancestor_groups,
@@ -556,7 +566,7 @@ class Tools:
           page_count: Number of pages to fetch starting from offset.
           compact: If true, tool returns a reduced field set.
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         params: dict[str, Any] = {}
         if state is not None:
             params["state"] = state
@@ -596,7 +606,7 @@ class Tools:
           page_count: Number of pages to fetch starting from offset.
           compact: If true, tool returns a reduced field set.
         """
-        gid = self._group_id_or_path(group)
+        gid = _group_id_or_path(group)
         params: dict[str, Any] = {"include_subgroups": include_subgroups}
         if state is not None:
             params["state"] = state
@@ -660,7 +670,7 @@ class Tools:
           page_count: Number of pages to fetch starting from offset.
           compact: If true, tool returns a reduced field set.
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         params: dict[str, Any] = {}
         if query:
             params["query"] = query
@@ -703,7 +713,7 @@ class Tools:
           page_count: Number of pages to fetch starting from offset.
           compact: If true, tool returns a reduced field set (still includes description).
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         params: dict[str, Any] = {"state": state}
         if labels:
             params["labels"] = labels
@@ -731,7 +741,7 @@ class Tools:
           issue_iid: Issue IID (project-scoped integer).
           compact: If true, tool returns a reduced field set (still includes description).
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         data = await self._request("GET", f"/projects/{pid}/issues/{issue_iid}")
         return self._maybe_compact("issue", data, compact)
 
@@ -760,7 +770,7 @@ class Tools:
           due_date: "YYYY-MM-DD" (or None).
           compact: If true, tool returns a reduced field set (still includes description).
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         payload: dict[str, Any] = {"title": title}
         if description is not None:
             payload["description"] = description
@@ -819,7 +829,7 @@ class Tools:
           - Single assignee behavior: use assignee_id=<user_id> OR unassign=True.
           - Prefer add_labels/remove_labels for incremental label changes.
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         payload: dict[str, Any] = {}
 
         if title is not None:
@@ -998,7 +1008,7 @@ class Tools:
           issue_iid: Issue IID.
           duration: GitLab duration string, e.g. "1h", "30m", "2d 3h".
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         return await self._request(
             "POST",
             f"/projects/{pid}/issues/{issue_iid}/time_estimate",
@@ -1015,7 +1025,7 @@ class Tools:
           project: Numeric project ID or "group/subgroup/project" path.
           issue_iid: Issue IID.
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         return await self._request(
             "POST", f"/projects/{pid}/issues/{issue_iid}/reset_time_estimate"
         )
@@ -1034,7 +1044,7 @@ class Tools:
           issue_iid: Issue IID.
           duration: GitLab duration string, e.g. "15m", "1h".
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         return await self._request(
             "POST",
             f"/projects/{pid}/issues/{issue_iid}/add_spent_time",
@@ -1051,7 +1061,7 @@ class Tools:
           project: Numeric project ID or "group/subgroup/project" path.
           issue_iid: Issue IID.
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         return await self._request(
             "POST", f"/projects/{pid}/issues/{issue_iid}/reset_spent_time"
         )
@@ -1067,7 +1077,7 @@ class Tools:
           issue_iid: Issue IID.
           body: Comment text (Markdown).
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         return await self._request(
             "POST", f"/projects/{pid}/issues/{issue_iid}/notes", json={"body": body}
         )
@@ -1092,7 +1102,7 @@ class Tools:
           page_count: Number of pages to fetch starting from offset.
           compact: If true, tool returns a reduced field set (still includes note body).
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         params: dict[str, Any] = {"sort": sort}
         data = await self._paginate(
             f"/projects/{pid}/issues/{issue_iid}/notes",
@@ -1113,7 +1123,7 @@ class Tools:
           issue_iid: Issue IID.
           compact: If true, tool returns a reduced field set.
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         data = await self._request(
             "PUT", f"/projects/{pid}/issues/{issue_iid}", json={"state_event": "close"}
         )
@@ -1149,7 +1159,7 @@ class Tools:
           page_count: Number of pages to fetch starting from offset.
           compact: If true, tool returns a reduced field set (still includes description).
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         params: dict[str, Any] = {"state": state}
         if source_branch:
             params["source_branch"] = source_branch
@@ -1177,7 +1187,7 @@ class Tools:
           mr_iid: Merge request IID (project-scoped integer).
           compact: If true, tool returns a reduced field set (still includes description).
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         data = await self._request("GET", f"/projects/{pid}/merge_requests/{mr_iid}")
         return self._maybe_compact("mr", data, compact)
 
@@ -1207,7 +1217,7 @@ class Tools:
           draft: If true, prefixes title with "Draft: " (if not already).
           compact: If true, tool returns a reduced field set (still includes description).
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         final_title = (
             f"Draft: {title}"
             if draft and not title.lower().startswith("draft:")
@@ -1241,7 +1251,7 @@ class Tools:
           mr_iid: MR IID.
           body: Comment text (Markdown).
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         return await self._request(
             "POST",
             f"/projects/{pid}/merge_requests/{mr_iid}/notes",
@@ -1268,7 +1278,7 @@ class Tools:
           page_count: Number of pages to fetch starting from offset.
           compact: If true, tool returns a reduced field set (still includes note body).
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         params: dict[str, Any] = {"sort": sort}
         data = await self._paginate(
             f"/projects/{pid}/merge_requests/{mr_iid}/notes",
@@ -1289,7 +1299,7 @@ class Tools:
           mr_iid: MR IID.
           sha: Optional commit SHA to approve (useful to avoid approving outdated changes).
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         payload: dict[str, Any] = {}
         if sha:
             payload["sha"] = sha
@@ -1321,7 +1331,7 @@ class Tools:
           squash: If set, overrides MR setting.
           compact: If true, tool returns a reduced field set.
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         payload: dict[str, Any] = {}
         if merge_commit_message is not None:
             payload["merge_commit_message"] = merge_commit_message
@@ -1363,7 +1373,7 @@ class Tools:
           offset: Page offset (0-based).
           page_count: Number of pages to fetch starting from offset.
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         params: dict[str, Any] = {"path": path, "recursive": recursive}
         if ref:
             params["ref"] = ref
@@ -1385,8 +1395,8 @@ class Tools:
           file_path: Path to file in repo.
           ref: Branch/tag/commit (default "HEAD").
         """
-        pid = self._project_id_or_path(project)
-        encoded_file_path = self._encode_path(file_path)
+        pid = _project_id_or_path(project)
+        encoded_file_path = _encode_path(file_path)
         return await self._request(
             "GET",
             f"/projects/{pid}/repository/files/{encoded_file_path}",
@@ -1404,8 +1414,8 @@ class Tools:
           file_path: Path to file in repo.
           ref: Branch/tag/commit (default "HEAD").
         """
-        pid = self._project_id_or_path(project)
-        encoded_file_path = self._encode_path(file_path)
+        pid = _project_id_or_path(project)
+        encoded_file_path = _encode_path(file_path)
         return await self._request(
             "GET",
             f"/projects/{pid}/repository/files/{encoded_file_path}/raw",
@@ -1426,7 +1436,7 @@ class Tools:
           to_ref: Target ref.
           straight: If true, uses straight comparison.
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         return await self._request(
             "GET",
             f"/projects/{pid}/repository/compare",
@@ -1463,7 +1473,7 @@ class Tools:
           - Requires Valves.allow_repo_writes=true.
         """
         self._ensure_writes_allowed()
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         payload: dict[str, Any] = {
             "branch": branch,
             "commit_message": commit_message,
@@ -1507,11 +1517,11 @@ class Tools:
           - Requires Valves.allow_repo_writes=true.
         """
         self._ensure_writes_allowed()
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
 
         exists = True
         try:
-            encoded_file_path = self._encode_path(file_path)
+            encoded_file_path = _encode_path(file_path)
             await self._request(
                 "GET",
                 f"/projects/{pid}/repository/files/{encoded_file_path}",
@@ -1563,7 +1573,7 @@ class Tools:
           - Requires Valves.allow_repo_writes=true.
         """
         self._ensure_writes_allowed()
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         payload: dict[str, Any] = {
             "branch": branch,
             "commit_message": commit_message,
@@ -1599,7 +1609,7 @@ class Tools:
           - Requires Valves.allow_repo_writes=true.
         """
         self._ensure_writes_allowed()
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         payload: dict[str, Any] = {
             "branch": branch,
             "commit_message": commit_message,
@@ -1641,7 +1651,7 @@ class Tools:
           - Requires Valves.allow_repo_writes=true.
         """
         self._ensure_writes_allowed()
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         payload: dict[str, Any] = {
             "branch": branch,
             "commit_message": commit_message,
@@ -1700,7 +1710,7 @@ class Tools:
           page_count: Number of pages to fetch starting from offset.
           compact: If true, tool returns a reduced field set.
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         params: dict[str, Any] = {}
         if ref:
             params["ref"] = ref
@@ -1725,7 +1735,7 @@ class Tools:
           pipeline_id: Pipeline numeric id.
           compact: If true, tool returns a reduced field set.
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         data = await self._request("GET", f"/projects/{pid}/pipelines/{pipeline_id}")
         return self._maybe_compact("pipeline", data, compact)
 
@@ -1762,7 +1772,7 @@ class Tools:
           page_count: Number of pages to fetch starting from offset.
           compact: If true, tool returns a reduced field set.
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         params: dict[str, Any] = {}
         if scope:
             params["scope"] = scope
@@ -1782,7 +1792,7 @@ class Tools:
           project: Numeric project ID or "group/subgroup/project" path.
           job_id: Job numeric id.
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         return await self._request(
             "GET",
             f"/projects/{pid}/jobs/{job_id}/trace",
@@ -1806,7 +1816,7 @@ class Tools:
           variables: Optional dict of CI variables (key -> value).
           compact: If true, tool returns a reduced field set.
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         payload: dict[str, Any] = {"ref": ref}
         if variables:
             payload["variables"] = [
@@ -1826,7 +1836,7 @@ class Tools:
           job_id: Job numeric id.
           compact: If true, tool returns a reduced field set.
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         data = await self._request("POST", f"/projects/{pid}/jobs/{job_id}/retry")
         return self._maybe_compact("job", data, compact)
 
@@ -1841,7 +1851,7 @@ class Tools:
           job_id: Job numeric id.
           compact: If true, tool returns a reduced field set.
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         data = await self._request("POST", f"/projects/{pid}/jobs/{job_id}/cancel")
         return self._maybe_compact("job", data, compact)
 
@@ -1867,7 +1877,7 @@ class Tools:
           page_count: Number of pages to fetch starting from offset.
           compact: If true, tool returns a reduced field set.
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         params: dict[str, Any] = {"with_content": with_content}
         data = await self._paginate(
             f"/projects/{pid}/wikis",
@@ -1895,8 +1905,8 @@ class Tools:
           render_html: If true, returns content rendered as HTML (GitLab API feature).
           compact: If true, tool returns a reduced field set (still includes content).
         """
-        pid = self._project_id_or_path(project)
-        encoded_slug = self._encode_path(slug)
+        pid = _project_id_or_path(project)
+        encoded_slug = _encode_path(slug)
         params: dict[str, Any] = {"render_html": render_html}
         if version is not None:
             params["version"] = version
@@ -1923,7 +1933,7 @@ class Tools:
           format: Content format: "markdown" | "rdoc" | "asciidoc" | "org" (default: "markdown").
           compact: If true, tool returns a reduced field set (still includes content).
         """
-        pid = self._project_id_or_path(project)
+        pid = _project_id_or_path(project)
         payload: dict[str, Any] = {
             "title": title,
             "content": content,
@@ -1952,8 +1962,8 @@ class Tools:
           format: Content format: "markdown" | "rdoc" | "asciidoc" | "org" (or None to keep existing).
           compact: If true, tool returns a reduced field set (still includes content).
         """
-        pid = self._project_id_or_path(project)
-        encoded_slug = self._encode_path(slug)
+        pid = _project_id_or_path(project)
+        encoded_slug = _encode_path(slug)
         payload: dict[str, Any] = {}
         if title is not None:
             payload["title"] = title
@@ -1979,6 +1989,6 @@ class Tools:
           project: Numeric project ID or "group/subgroup/project" path.
           slug: Wiki page slug (URL-friendly identifier).
         """
-        pid = self._project_id_or_path(project)
-        encoded_slug = self._encode_path(slug)
+        pid = _project_id_or_path(project)
+        encoded_slug = _encode_path(slug)
         return await self._request("DELETE", f"/projects/{pid}/wikis/{encoded_slug}")
