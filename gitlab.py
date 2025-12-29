@@ -229,6 +229,189 @@ def _compact_one(kind: str, obj: Any) -> Any:
     return obj
 
 
+def _api_base(valves: "Tools.Valves") -> str:
+    """
+    Construct the GitLab API base URL from valves configuration.
+    """
+    return valves.base_url.rstrip("/") + "/api/v4"
+
+
+def _headers(valves: "Tools.Valves") -> dict[str, str]:
+    """
+    Build request headers including authentication token.
+    """
+    if not valves.token:
+        raise ValueError(
+            "GitLab token is not set. Configure the tool Valves: token=..."
+        )
+
+    return {"PRIVATE-TOKEN": valves.token, "Content-Type": "application/json"}
+
+
+def _ensure_writes_allowed(valves: "Tools.Valves") -> None:
+    """
+    Check if repository write operations are enabled.
+    """
+    if not valves.allow_repo_writes:
+        raise PermissionError(
+            "Repository write operations are disabled. Set Valves.allow_repo_writes=true to enable."
+        )
+
+
+def _want_compact(valves: "Tools.Valves", compact: Optional[bool]) -> bool:
+    """
+    Determine if compact mode should be used based on valves default and explicit parameter.
+    """
+    return valves.compact_results_default if compact is None else bool(compact)
+
+
+def _maybe_compact(
+    valves: "Tools.Valves", kind: str, data: Any, compact: Optional[bool]
+) -> Any:
+    """
+    Apply compact transformation to data if compact mode is enabled.
+    """
+    if not _want_compact(valves, compact):
+        return data
+    if isinstance(data, list):
+        return [_compact_one(kind, x) for x in data]
+    return _compact_one(kind, data)
+
+
+def _compute_delay(
+    valves: "Tools.Valves", attempt: int, retry_after: Optional[float] = None
+) -> float:
+    """
+    Calculate retry delay with exponential backoff and jitter.
+    """
+    if retry_after is not None and retry_after > 0:
+        base = float(retry_after)
+    else:
+        base = float(valves.backoff_initial_seconds) * (2 ** (attempt - 1))
+
+    base = min(base, float(valves.backoff_max_seconds))
+
+    jitter = float(valves.retry_jitter)
+    if jitter > 0:
+        delta = base * jitter
+        base = base + random.uniform(-delta, delta)
+
+    return max(0.0, base)
+
+
+async def _request(
+    valves: "Tools.Valves",
+    method: str,
+    path: str,
+    params: Optional[dict[str, Any]] = None,
+    json: Optional[dict[str, Any]] = None,
+    accept: Optional[str] = None,
+    want_text: bool = False,
+) -> Any:
+    """
+    Execute HTTP request to GitLab API with retry logic and error handling.
+    """
+    url = _api_base(valves) + path
+    headers = _headers(valves)
+    if accept:
+        headers = dict(headers)
+        headers["Accept"] = accept
+
+    max_retries = max(0, int(valves.max_retries))
+
+    async with httpx.AsyncClient(
+        verify=valves.verify_ssl,
+        timeout=valves.timeout_seconds,
+        headers=headers,
+    ) as client:
+        for attempt in range(0, max_retries + 1):
+            try:
+                r = await client.request(method, url, params=params, json=json)
+
+                if r.status_code in (429, 502, 503, 504) and attempt < max_retries:
+                    retry_after_hdr = r.headers.get("Retry-After")
+                    retry_after: Optional[float] = None
+                    if retry_after_hdr:
+                        try:
+                            retry_after = float(retry_after_hdr)
+                        except Exception:
+                            retry_after = None
+                    delay = _compute_delay(
+                        valves, attempt=attempt + 1, retry_after=retry_after
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+
+                if r.status_code >= 400:
+                    try:
+                        detail = r.json()
+                    except Exception:
+                        detail = r.text
+                    raise RuntimeError(
+                        f"GitLab API error {r.status_code} for {method} {path}: {detail}"
+                    )
+
+                if r.status_code == 204:
+                    return {"ok": True}
+
+                if want_text:
+                    return r.text
+
+                if not r.text:
+                    return {"ok": True}
+
+                return r.json()
+
+            except (
+                httpx.ConnectTimeout,
+                httpx.ReadTimeout,
+                httpx.PoolTimeout,
+                httpx.ConnectError,
+            ) as e:
+                if attempt < max_retries:
+                    delay = _compute_delay(valves, attempt=attempt + 1, retry_after=None)
+                    await asyncio.sleep(delay)
+                    continue
+                raise e
+
+
+async def _paginate(
+    valves: "Tools.Valves",
+    path: str,
+    params: Optional[dict[str, Any]] = None,
+    offset: int = 0,
+    page_count: int = 1,
+) -> list[Any]:
+    """
+    Fetch paginated results from GitLab API.
+    """
+    if offset < 0:
+        raise ValueError("offset must be >= 0")
+    if page_count < 1:
+        raise ValueError("page_count must be >= 1")
+
+    params = dict(params or {})
+    params.setdefault("per_page", valves.per_page)
+
+    start_page = offset + 1
+    end_page = start_page + page_count - 1
+
+    out: list[Any] = []
+    for page in range(start_page, end_page + 1):
+        params["page"] = page
+        chunk = await _request(valves, "GET", path, params=params)
+
+        if not isinstance(chunk, list):
+            return [chunk]
+
+        out.extend(chunk)
+
+        if len(chunk) < int(params["per_page"]):
+            break
+
+    return out
+
+
 class Tools:
     """
     Open WebUI Toolkit for GitLab.
@@ -289,161 +472,6 @@ class Tools:
         )
 
     # ----------------------------
-    # Internal helpers (valves-dependent)
-    # ----------------------------
-
-    def _api_base(self) -> str:
-        return self.valves.base_url.rstrip("/") + "/api/v4"
-
-    def _headers(self) -> dict[str, str]:
-        if not self.valves.token:
-            raise ValueError(
-                "GitLab token is not set. Configure the tool Valves: token=..."
-            )
-
-        return {"PRIVATE-TOKEN": self.valves.token, "Content-Type": "application/json"}
-
-    def _ensure_writes_allowed(self) -> None:
-        if not self.valves.allow_repo_writes:
-            raise PermissionError(
-                "Repository write operations are disabled. Set Valves.allow_repo_writes=true to enable."
-            )
-
-    def _want_compact(self, compact: Optional[bool]) -> bool:
-        return self.valves.compact_results_default if compact is None else bool(compact)
-
-    def _maybe_compact(self, kind: str, data: Any, compact: Optional[bool]) -> Any:
-        if not self._want_compact(compact):
-            return data
-        if isinstance(data, list):
-            return [_compact_one(kind, x) for x in data]
-        return _compact_one(kind, data)
-
-    def _compute_delay(
-        self, attempt: int, retry_after: Optional[float] = None
-    ) -> float:
-        if retry_after is not None and retry_after > 0:
-            base = float(retry_after)
-        else:
-            base = float(self.valves.backoff_initial_seconds) * (2 ** (attempt - 1))
-
-        base = min(base, float(self.valves.backoff_max_seconds))
-
-        jitter = float(self.valves.retry_jitter)
-        if jitter > 0:
-            delta = base * jitter
-            base = base + random.uniform(-delta, delta)
-
-        return max(0.0, base)
-
-    async def _request(
-        self,
-        method: str,
-        path: str,
-        params: Optional[dict[str, Any]] = None,
-        json: Optional[dict[str, Any]] = None,
-        accept: Optional[str] = None,
-        want_text: bool = False,
-    ) -> Any:
-        url = self._api_base() + path
-        headers = self._headers()
-        if accept:
-            headers = dict(headers)
-            headers["Accept"] = accept
-
-        max_retries = max(0, int(self.valves.max_retries))
-
-        async with httpx.AsyncClient(
-            verify=self.valves.verify_ssl,
-            timeout=self.valves.timeout_seconds,
-            headers=headers,
-        ) as client:
-            for attempt in range(0, max_retries + 1):
-                try:
-                    r = await client.request(method, url, params=params, json=json)
-
-                    if r.status_code in (429, 502, 503, 504) and attempt < max_retries:
-                        retry_after_hdr = r.headers.get("Retry-After")
-                        retry_after: Optional[float] = None
-                        if retry_after_hdr:
-                            try:
-                                retry_after = float(retry_after_hdr)
-                            except Exception:
-                                retry_after = None
-                        delay = self._compute_delay(
-                            attempt=attempt + 1, retry_after=retry_after
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-
-                    if r.status_code >= 400:
-                        try:
-                            detail = r.json()
-                        except Exception:
-                            detail = r.text
-                        raise RuntimeError(
-                            f"GitLab API error {r.status_code} for {method} {path}: {detail}"
-                        )
-
-                    if r.status_code == 204:
-                        return {"ok": True}
-
-                    if want_text:
-                        return r.text
-
-                    if not r.text:
-                        return {"ok": True}
-
-                    return r.json()
-
-                except (
-                    httpx.ConnectTimeout,
-                    httpx.ReadTimeout,
-                    httpx.PoolTimeout,
-                    httpx.ConnectError,
-                ) as e:
-                    if attempt < max_retries:
-                        delay = self._compute_delay(
-                            attempt=attempt + 1, retry_after=None
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-                    raise e
-
-    async def _paginate(
-        self,
-        path: str,
-        params: Optional[dict[str, Any]] = None,
-        offset: int = 0,
-        page_count: int = 1,
-    ) -> list[Any]:
-        if offset < 0:
-            raise ValueError("offset must be >= 0")
-        if page_count < 1:
-            raise ValueError("page_count must be >= 1")
-
-        params = dict(params or {})
-        params.setdefault("per_page", self.valves.per_page)
-
-        start_page = offset + 1
-        end_page = start_page + page_count - 1
-
-        out: list[Any] = []
-        for page in range(start_page, end_page + 1):
-            params["page"] = page
-            chunk = await self._request("GET", path, params=params)
-
-            if not isinstance(chunk, list):
-                return [chunk]
-
-            out.extend(chunk)
-
-            if len(chunk) < int(params["per_page"]):
-                break
-
-        return out
-
-    # ----------------------------
     # Projects
     # ----------------------------
 
@@ -486,10 +514,10 @@ class Tools:
         if visibility:
             params["visibility"] = visibility
 
-        data = await self._paginate(
+        data = await _paginate(self.valves, 
             "/projects", params=params, offset=offset, page_count=page_count
         )
-        return self._maybe_compact("project", data, compact)
+        return _maybe_compact(self.valves, "project", data, compact)
 
     async def gitlab_get_project(
         self, project: ProjectRef, compact: Optional[bool] = None
@@ -502,8 +530,8 @@ class Tools:
           compact: If true, tool returns a reduced field set.
         """
         pid = _project_id_or_path(project)
-        data = await self._request("GET", f"/projects/{pid}")
-        return self._maybe_compact("project", data, compact)
+        data = await _request(self.valves, "GET", f"/projects/{pid}")
+        return _maybe_compact(self.valves, "project", data, compact)
 
     # ----------------------------
     # Helper lookups
@@ -536,13 +564,13 @@ class Tools:
         }
         if search:
             params["search"] = search
-        data = await self._paginate(
+        data = await _paginate(self.valves, 
             f"/projects/{pid}/labels",
             params=params,
             offset=offset,
             page_count=page_count,
         )
-        return self._maybe_compact("label", data, compact)
+        return _maybe_compact(self.valves, "label", data, compact)
 
     async def gitlab_list_milestones(
         self,
@@ -576,13 +604,13 @@ class Tools:
         if not exclude_group_milestones:
             params["include_parent_milestones"] = True
 
-        data = await self._paginate(
+        data = await _paginate(self.valves, 
             f"/projects/{pid}/milestones",
             params=params,
             offset=offset,
             page_count=page_count,
         )
-        return self._maybe_compact("milestone", data, compact)
+        return _maybe_compact(self.valves, "milestone", data, compact)
 
     async def gitlab_list_group_milestones(
         self,
@@ -612,13 +640,13 @@ class Tools:
             params["state"] = state
         if search:
             params["search"] = search
-        data = await self._paginate(
+        data = await _paginate(self.valves, 
             f"/groups/{gid}/milestones",
             params=params,
             offset=offset,
             page_count=page_count,
         )
-        return self._maybe_compact("milestone", data, compact)
+        return _maybe_compact(self.valves, "milestone", data, compact)
 
     async def gitlab_search_users(
         self,
@@ -645,10 +673,10 @@ class Tools:
             params["active"] = active
         if external is not None:
             params["external"] = external
-        data = await self._paginate(
+        data = await _paginate(self.valves, 
             "/users", params=params, offset=offset, page_count=page_count
         )
-        return self._maybe_compact("user", data, compact)
+        return _maybe_compact(self.valves, "user", data, compact)
 
     async def gitlab_list_project_members(
         self,
@@ -679,10 +707,10 @@ class Tools:
             if include_inherited
             else f"/projects/{pid}/members"
         )
-        data = await self._paginate(
+        data = await _paginate(self.valves, 
             endpoint, params=params, offset=offset, page_count=page_count
         )
-        return self._maybe_compact("member", data, compact)
+        return _maybe_compact(self.valves, "member", data, compact)
 
     # ----------------------------
     # Issues (read / create)
@@ -722,13 +750,13 @@ class Tools:
         if search:
             params["search"] = search
 
-        data = await self._paginate(
+        data = await _paginate(self.valves, 
             f"/projects/{pid}/issues",
             params=params,
             offset=offset,
             page_count=page_count,
         )
-        return self._maybe_compact("issue", data, compact)
+        return _maybe_compact(self.valves, "issue", data, compact)
 
     async def gitlab_get_issue(
         self, project: ProjectRef, issue_iid: int, compact: Optional[bool] = None
@@ -742,8 +770,8 @@ class Tools:
           compact: If true, tool returns a reduced field set (still includes description).
         """
         pid = _project_id_or_path(project)
-        data = await self._request("GET", f"/projects/{pid}/issues/{issue_iid}")
-        return self._maybe_compact("issue", data, compact)
+        data = await _request(self.valves, "GET", f"/projects/{pid}/issues/{issue_iid}")
+        return _maybe_compact(self.valves, "issue", data, compact)
 
     async def gitlab_create_issue(
         self,
@@ -783,8 +811,8 @@ class Tools:
         if due_date is not None:
             payload["due_date"] = due_date
 
-        data = await self._request("POST", f"/projects/{pid}/issues", json=payload)
-        return self._maybe_compact("issue", data, compact)
+        data = await _request(self.valves, "POST", f"/projects/{pid}/issues", json=payload)
+        return _maybe_compact(self.valves, "issue", data, compact)
 
     # ----------------------------
     # Issues (edit/update)
@@ -857,12 +885,12 @@ class Tools:
         elif due_date is not None:
             payload["due_date"] = due_date
 
-        data = await self._request(
+        data = await _request(self.valves, 
             "PUT",
             f"/projects/{pid}/issues/{issue_iid}",
             json=payload if payload else None,
         )
-        return self._maybe_compact("issue", data, compact)
+        return _maybe_compact(self.valves, "issue", data, compact)
 
     async def gitlab_set_issue_description(
         self,
@@ -1009,7 +1037,7 @@ class Tools:
           duration: GitLab duration string, e.g. "1h", "30m", "2d 3h".
         """
         pid = _project_id_or_path(project)
-        return await self._request(
+        return await _request(self.valves, 
             "POST",
             f"/projects/{pid}/issues/{issue_iid}/time_estimate",
             json={"duration": duration},
@@ -1026,7 +1054,7 @@ class Tools:
           issue_iid: Issue IID.
         """
         pid = _project_id_or_path(project)
-        return await self._request(
+        return await _request(self.valves, 
             "POST", f"/projects/{pid}/issues/{issue_iid}/reset_time_estimate"
         )
 
@@ -1045,7 +1073,7 @@ class Tools:
           duration: GitLab duration string, e.g. "15m", "1h".
         """
         pid = _project_id_or_path(project)
-        return await self._request(
+        return await _request(self.valves, 
             "POST",
             f"/projects/{pid}/issues/{issue_iid}/add_spent_time",
             json={"duration": duration},
@@ -1062,7 +1090,7 @@ class Tools:
           issue_iid: Issue IID.
         """
         pid = _project_id_or_path(project)
-        return await self._request(
+        return await _request(self.valves, 
             "POST", f"/projects/{pid}/issues/{issue_iid}/reset_spent_time"
         )
 
@@ -1078,7 +1106,7 @@ class Tools:
           body: Comment text (Markdown).
         """
         pid = _project_id_or_path(project)
-        return await self._request(
+        return await _request(self.valves, 
             "POST", f"/projects/{pid}/issues/{issue_iid}/notes", json={"body": body}
         )
 
@@ -1104,13 +1132,13 @@ class Tools:
         """
         pid = _project_id_or_path(project)
         params: dict[str, Any] = {"sort": sort}
-        data = await self._paginate(
+        data = await _paginate(self.valves, 
             f"/projects/{pid}/issues/{issue_iid}/notes",
             params=params,
             offset=offset,
             page_count=page_count,
         )
-        return self._maybe_compact("note", data, compact)
+        return _maybe_compact(self.valves, "note", data, compact)
 
     async def gitlab_close_issue(
         self, project: ProjectRef, issue_iid: int, compact: Optional[bool] = None
@@ -1124,10 +1152,10 @@ class Tools:
           compact: If true, tool returns a reduced field set.
         """
         pid = _project_id_or_path(project)
-        data = await self._request(
+        data = await _request(self.valves, 
             "PUT", f"/projects/{pid}/issues/{issue_iid}", json={"state_event": "close"}
         )
-        return self._maybe_compact("issue", data, compact)
+        return _maybe_compact(self.valves, "issue", data, compact)
 
     # ----------------------------
     # Merge Requests
@@ -1168,13 +1196,13 @@ class Tools:
         if search:
             params["search"] = search
 
-        data = await self._paginate(
+        data = await _paginate(self.valves, 
             f"/projects/{pid}/merge_requests",
             params=params,
             offset=offset,
             page_count=page_count,
         )
-        return self._maybe_compact("mr", data, compact)
+        return _maybe_compact(self.valves, "mr", data, compact)
 
     async def gitlab_get_merge_request(
         self, project: ProjectRef, mr_iid: int, compact: Optional[bool] = None
@@ -1188,8 +1216,8 @@ class Tools:
           compact: If true, tool returns a reduced field set (still includes description).
         """
         pid = _project_id_or_path(project)
-        data = await self._request("GET", f"/projects/{pid}/merge_requests/{mr_iid}")
-        return self._maybe_compact("mr", data, compact)
+        data = await _request(self.valves, "GET", f"/projects/{pid}/merge_requests/{mr_iid}")
+        return _maybe_compact(self.valves, "mr", data, compact)
 
     async def gitlab_create_merge_request(
         self,
@@ -1235,10 +1263,10 @@ class Tools:
         if squash is not None:
             payload["squash"] = squash
 
-        data = await self._request(
+        data = await _request(self.valves, 
             "POST", f"/projects/{pid}/merge_requests", json=payload
         )
-        return self._maybe_compact("mr", data, compact)
+        return _maybe_compact(self.valves, "mr", data, compact)
 
     async def gitlab_add_mr_note(
         self, project: ProjectRef, mr_iid: int, body: str
@@ -1252,7 +1280,7 @@ class Tools:
           body: Comment text (Markdown).
         """
         pid = _project_id_or_path(project)
-        return await self._request(
+        return await _request(self.valves, 
             "POST",
             f"/projects/{pid}/merge_requests/{mr_iid}/notes",
             json={"body": body},
@@ -1280,13 +1308,13 @@ class Tools:
         """
         pid = _project_id_or_path(project)
         params: dict[str, Any] = {"sort": sort}
-        data = await self._paginate(
+        data = await _paginate(self.valves, 
             f"/projects/{pid}/merge_requests/{mr_iid}/notes",
             params=params,
             offset=offset,
             page_count=page_count,
         )
-        return self._maybe_compact("note", data, compact)
+        return _maybe_compact(self.valves, "note", data, compact)
 
     async def gitlab_approve_merge_request(
         self, project: ProjectRef, mr_iid: int, sha: Optional[str] = None
@@ -1303,7 +1331,7 @@ class Tools:
         payload: dict[str, Any] = {}
         if sha:
             payload["sha"] = sha
-        return await self._request(
+        return await _request(self.valves, 
             "POST",
             f"/projects/{pid}/merge_requests/{mr_iid}/approve",
             json=payload if payload else None,
@@ -1342,12 +1370,12 @@ class Tools:
         if squash is not None:
             payload["squash"] = squash
 
-        data = await self._request(
+        data = await _request(self.valves, 
             "PUT",
             f"/projects/{pid}/merge_requests/{mr_iid}/merge",
             json=payload if payload else None,
         )
-        return self._maybe_compact("mr", data, compact)
+        return _maybe_compact(self.valves, "mr", data, compact)
 
     # ----------------------------
     # Repository browsing
@@ -1377,7 +1405,7 @@ class Tools:
         params: dict[str, Any] = {"path": path, "recursive": recursive}
         if ref:
             params["ref"] = ref
-        return await self._paginate(
+        return await _paginate(self.valves, 
             f"/projects/{pid}/repository/tree",
             params=params,
             offset=offset,
@@ -1397,7 +1425,7 @@ class Tools:
         """
         pid = _project_id_or_path(project)
         encoded_file_path = _encode_path(file_path)
-        return await self._request(
+        return await _request(self.valves, 
             "GET",
             f"/projects/{pid}/repository/files/{encoded_file_path}",
             params={"ref": ref},
@@ -1416,7 +1444,7 @@ class Tools:
         """
         pid = _project_id_or_path(project)
         encoded_file_path = _encode_path(file_path)
-        return await self._request(
+        return await _request(self.valves, 
             "GET",
             f"/projects/{pid}/repository/files/{encoded_file_path}/raw",
             params={"ref": ref},
@@ -1437,7 +1465,7 @@ class Tools:
           straight: If true, uses straight comparison.
         """
         pid = _project_id_or_path(project)
-        return await self._request(
+        return await _request(self.valves, 
             "GET",
             f"/projects/{pid}/repository/compare",
             params={"from": from_ref, "to": to_ref, "straight": straight},
@@ -1472,7 +1500,7 @@ class Tools:
         Note:
           - Requires Valves.allow_repo_writes=true.
         """
-        self._ensure_writes_allowed()
+        _ensure_writes_allowed(self.valves)
         pid = _project_id_or_path(project)
         payload: dict[str, Any] = {
             "branch": branch,
@@ -1485,7 +1513,7 @@ class Tools:
             payload["author_email"] = author_email
         if author_name is not None:
             payload["author_name"] = author_name
-        return await self._request(
+        return await _request(self.valves, 
             "POST", f"/projects/{pid}/repository/commits", json=payload
         )
 
@@ -1516,13 +1544,13 @@ class Tools:
         Note:
           - Requires Valves.allow_repo_writes=true.
         """
-        self._ensure_writes_allowed()
+        _ensure_writes_allowed(self.valves)
         pid = _project_id_or_path(project)
 
         exists = True
         try:
             encoded_file_path = _encode_path(file_path)
-            await self._request(
+            await _request(self.valves, 
                 "GET",
                 f"/projects/{pid}/repository/files/{encoded_file_path}",
                 params={"ref": branch},
@@ -1547,7 +1575,7 @@ class Tools:
         if start_branch is not None:
             payload["start_branch"] = start_branch
 
-        return await self._request(
+        return await _request(self.valves, 
             "POST", f"/projects/{pid}/repository/commits", json=payload
         )
 
@@ -1572,7 +1600,7 @@ class Tools:
         Note:
           - Requires Valves.allow_repo_writes=true.
         """
-        self._ensure_writes_allowed()
+        _ensure_writes_allowed(self.valves)
         pid = _project_id_or_path(project)
         payload: dict[str, Any] = {
             "branch": branch,
@@ -1581,7 +1609,7 @@ class Tools:
         }
         if start_branch is not None:
             payload["start_branch"] = start_branch
-        return await self._request(
+        return await _request(self.valves, 
             "POST", f"/projects/{pid}/repository/commits", json=payload
         )
 
@@ -1608,7 +1636,7 @@ class Tools:
         Note:
           - Requires Valves.allow_repo_writes=true.
         """
-        self._ensure_writes_allowed()
+        _ensure_writes_allowed(self.valves)
         pid = _project_id_or_path(project)
         payload: dict[str, Any] = {
             "branch": branch,
@@ -1623,7 +1651,7 @@ class Tools:
         }
         if start_branch is not None:
             payload["start_branch"] = start_branch
-        return await self._request(
+        return await _request(self.valves, 
             "POST", f"/projects/{pid}/repository/commits", json=payload
         )
 
@@ -1650,7 +1678,7 @@ class Tools:
         Note:
           - Requires Valves.allow_repo_writes=true.
         """
-        self._ensure_writes_allowed()
+        _ensure_writes_allowed(self.valves)
         pid = _project_id_or_path(project)
         payload: dict[str, Any] = {
             "branch": branch,
@@ -1665,7 +1693,7 @@ class Tools:
         }
         if start_branch is not None:
             payload["start_branch"] = start_branch
-        return await self._request(
+        return await _request(self.valves, 
             "POST", f"/projects/{pid}/repository/commits", json=payload
         )
 
@@ -1716,13 +1744,13 @@ class Tools:
             params["ref"] = ref
         if status:
             params["status"] = status
-        data = await self._paginate(
+        data = await _paginate(self.valves, 
             f"/projects/{pid}/pipelines",
             params=params,
             offset=offset,
             page_count=page_count,
         )
-        return self._maybe_compact("pipeline", data, compact)
+        return _maybe_compact(self.valves, "pipeline", data, compact)
 
     async def gitlab_get_pipeline(
         self, project: ProjectRef, pipeline_id: int, compact: Optional[bool] = None
@@ -1736,8 +1764,8 @@ class Tools:
           compact: If true, tool returns a reduced field set.
         """
         pid = _project_id_or_path(project)
-        data = await self._request("GET", f"/projects/{pid}/pipelines/{pipeline_id}")
-        return self._maybe_compact("pipeline", data, compact)
+        data = await _request(self.valves, "GET", f"/projects/{pid}/pipelines/{pipeline_id}")
+        return _maybe_compact(self.valves, "pipeline", data, compact)
 
     async def gitlab_list_pipeline_jobs(
         self,
@@ -1776,13 +1804,13 @@ class Tools:
         params: dict[str, Any] = {}
         if scope:
             params["scope"] = scope
-        data = await self._paginate(
+        data = await _paginate(self.valves, 
             f"/projects/{pid}/pipelines/{pipeline_id}/jobs",
             params=params,
             offset=offset,
             page_count=page_count,
         )
-        return self._maybe_compact("job", data, compact)
+        return _maybe_compact(self.valves, "job", data, compact)
 
     async def gitlab_get_job_trace(self, project: ProjectRef, job_id: int) -> str:
         """
@@ -1793,7 +1821,7 @@ class Tools:
           job_id: Job numeric id.
         """
         pid = _project_id_or_path(project)
-        return await self._request(
+        return await _request(self.valves, 
             "GET",
             f"/projects/{pid}/jobs/{job_id}/trace",
             accept="text/plain",
@@ -1822,8 +1850,8 @@ class Tools:
             payload["variables"] = [
                 {"key": k, "value": v} for k, v in variables.items()
             ]
-        data = await self._request("POST", f"/projects/{pid}/pipeline", json=payload)
-        return self._maybe_compact("pipeline", data, compact)
+        data = await _request(self.valves, "POST", f"/projects/{pid}/pipeline", json=payload)
+        return _maybe_compact(self.valves, "pipeline", data, compact)
 
     async def gitlab_retry_job(
         self, project: ProjectRef, job_id: int, compact: Optional[bool] = None
@@ -1837,8 +1865,8 @@ class Tools:
           compact: If true, tool returns a reduced field set.
         """
         pid = _project_id_or_path(project)
-        data = await self._request("POST", f"/projects/{pid}/jobs/{job_id}/retry")
-        return self._maybe_compact("job", data, compact)
+        data = await _request(self.valves, "POST", f"/projects/{pid}/jobs/{job_id}/retry")
+        return _maybe_compact(self.valves, "job", data, compact)
 
     async def gitlab_cancel_job(
         self, project: ProjectRef, job_id: int, compact: Optional[bool] = None
@@ -1852,8 +1880,8 @@ class Tools:
           compact: If true, tool returns a reduced field set.
         """
         pid = _project_id_or_path(project)
-        data = await self._request("POST", f"/projects/{pid}/jobs/{job_id}/cancel")
-        return self._maybe_compact("job", data, compact)
+        data = await _request(self.valves, "POST", f"/projects/{pid}/jobs/{job_id}/cancel")
+        return _maybe_compact(self.valves, "job", data, compact)
 
     # ----------------------------
     # Wiki Operations
@@ -1879,13 +1907,13 @@ class Tools:
         """
         pid = _project_id_or_path(project)
         params: dict[str, Any] = {"with_content": with_content}
-        data = await self._paginate(
+        data = await _paginate(self.valves, 
             f"/projects/{pid}/wikis",
             params=params,
             offset=offset,
             page_count=page_count,
         )
-        return self._maybe_compact("wiki", data, compact)
+        return _maybe_compact(self.valves, "wiki", data, compact)
 
     async def gitlab_get_wiki_page(
         self,
@@ -1910,10 +1938,10 @@ class Tools:
         params: dict[str, Any] = {"render_html": render_html}
         if version is not None:
             params["version"] = version
-        data = await self._request(
+        data = await _request(self.valves, 
             "GET", f"/projects/{pid}/wikis/{encoded_slug}", params=params
         )
-        return self._maybe_compact("wiki", data, compact)
+        return _maybe_compact(self.valves, "wiki", data, compact)
 
     async def gitlab_create_wiki_page(
         self,
@@ -1939,8 +1967,8 @@ class Tools:
             "content": content,
             "format": format,
         }
-        data = await self._request("POST", f"/projects/{pid}/wikis", json=payload)
-        return self._maybe_compact("wiki", data, compact)
+        data = await _request(self.valves, "POST", f"/projects/{pid}/wikis", json=payload)
+        return _maybe_compact(self.valves, "wiki", data, compact)
 
     async def gitlab_update_wiki_page(
         self,
@@ -1972,12 +2000,12 @@ class Tools:
         if format is not None:
             payload["format"] = format
 
-        data = await self._request(
+        data = await _request(self.valves, 
             "PUT",
             f"/projects/{pid}/wikis/{encoded_slug}",
             json=payload if payload else None,
         )
-        return self._maybe_compact("wiki", data, compact)
+        return _maybe_compact(self.valves, "wiki", data, compact)
 
     async def gitlab_delete_wiki_page(
         self, project: ProjectRef, slug: str
@@ -1991,4 +2019,4 @@ class Tools:
         """
         pid = _project_id_or_path(project)
         encoded_slug = _encode_path(slug)
-        return await self._request("DELETE", f"/projects/{pid}/wikis/{encoded_slug}")
+        return await _request(self.valves, "DELETE", f"/projects/{pid}/wikis/{encoded_slug}")
