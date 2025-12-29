@@ -1,6 +1,6 @@
 # GitLab Tool for Open WebUI - Design Specification
 
-**Version:** 1.8.0  
+**Version:** 1.9.0  
 **Author:** René Vögeli  
 **License:** MIT  
 **Last Updated:** 2025-12-29
@@ -21,6 +21,7 @@ The GitLab Tool is an Open WebUI integration that provides comprehensive access 
 - **Repository Access**: Browse repository trees, read files (raw and base64), compare branches, and view diffs
 - **Repository Writes**: Optional controlled write operations (create/update/delete/move/chmod files)
 - **CI/CD Control**: List and monitor pipelines, view job logs, trigger pipelines, retry/cancel jobs
+- **Wiki Operations**: Full CRUD operations on wiki pages including list, get, create, update, and delete
 - **Helper Endpoints**: Search users, list labels, milestones, and project members
 - **Compact Mode**: Configurable output mode to reduce response size while preserving essential information
 - **Reliability Features**: Automatic retry logic with exponential backoff, rate limit handling, and jitter
@@ -33,6 +34,7 @@ The GitLab Tool is an Open WebUI integration that provides comprehensive access 
 - CI/CD monitoring and control
 - Repository exploration and documentation generation
 - Automated merge request workflows
+- Wiki documentation management and generation
 
 ---
 
@@ -134,6 +136,7 @@ The `Valves` class provides type-safe configuration:
 - Milestones
 - Members/Users
 - Notes/Comments
+- Wiki Pages
 
 #### 2.2.4 Authentication & Authorization
 
@@ -719,6 +722,100 @@ async def gitlab_list_project_members(
 
 **Compact Fields**: id, username, name, state, access_level, web_url
 
+### 3.7 Wiki Operations
+
+#### 3.7.1 List Wiki Pages
+```python
+async def gitlab_list_wiki_pages(
+    project: ProjectRef,
+    with_content: bool = False,
+    offset: int = 0,
+    page_count: int = 1,
+    compact: Optional[bool] = None,
+) -> list[Json]
+```
+
+**Purpose**: List all wiki pages in a project.
+
+**Key Parameters**:
+- `with_content`: If true, returns full page content (may be large for many pages)
+
+**Compact Fields**: slug, title, content (preserved), format, encoding
+
+#### 3.7.2 Get Wiki Page
+```python
+async def gitlab_get_wiki_page(
+    project: ProjectRef,
+    slug: str,
+    version: Optional[str] = None,
+    render_html: bool = False,
+    compact: Optional[bool] = None,
+) -> Json
+```
+
+**Purpose**: Retrieve a single wiki page by slug.
+
+**Key Parameters**:
+- `slug`: Wiki page slug (URL-friendly identifier)
+- `version`: Optional version ID to retrieve a specific version
+- `render_html`: If true, returns content rendered as HTML
+
+**Compact Fields**: slug, title, content (preserved), format, encoding
+
+#### 3.7.3 Create Wiki Page
+```python
+async def gitlab_create_wiki_page(
+    project: ProjectRef,
+    title: str,
+    content: str,
+    format: Literal["markdown", "rdoc", "asciidoc", "org"] = "markdown",
+    compact: Optional[bool] = None,
+) -> Json
+```
+
+**Purpose**: Create a new wiki page.
+
+**Key Parameters**:
+- `title`: Wiki page title (will be converted to slug automatically by GitLab)
+- `content`: Wiki page content
+- `format`: Content format (markdown, rdoc, asciidoc, or org)
+
+**Note**: GitLab automatically generates a slug from the title.
+
+#### 3.7.4 Update Wiki Page
+```python
+async def gitlab_update_wiki_page(
+    project: ProjectRef,
+    slug: str,
+    title: Optional[str] = None,
+    content: Optional[str] = None,
+    format: Optional[Literal["markdown", "rdoc", "asciidoc", "org"]] = None,
+    compact: Optional[bool] = None,
+) -> Json
+```
+
+**Purpose**: Update an existing wiki page.
+
+**Key Parameters**:
+- `slug`: Wiki page slug to update
+- `title`: New title (or None to keep existing)
+- `content`: New content (or None to keep existing)
+- `format`: Content format (or None to keep existing)
+
+**Note**: Updating the title will change the slug.
+
+#### 3.7.5 Delete Wiki Page
+```python
+async def gitlab_delete_wiki_page(
+    project: ProjectRef,
+    slug: str,
+) -> Json
+```
+
+**Purpose**: Delete a wiki page.
+
+**Warning**: This operation is irreversible.
+
 ---
 
 ## 4. Data Models
@@ -758,6 +855,7 @@ Each entity type has a specific compact schema:
 **Pipeline/Job**: Status + identifiers + timestamps
 **Label**: Name + description (never removed) + colors
 **Milestone**: Title + description (never removed) + dates
+**Wiki**: Slug + title + content (never removed) + format + encoding
 
 ---
 
@@ -1024,6 +1122,12 @@ AI assistants invoke methods through natural language:
 3. `gitlab_get_job_trace(job_id=456)` - Fetch logs
 4. `gitlab_retry_job(job_id=456)` - Retry if needed
 
+**Wiki Documentation Workflow**:
+1. `gitlab_list_wiki_pages(with_content=False)` - Get wiki page list
+2. `gitlab_get_wiki_page(slug="home")` - Get specific page content
+3. `gitlab_create_wiki_page(title="API Guide", content="...")` - Create new page
+4. `gitlab_update_wiki_page(slug="api-guide", content="...")` - Update existing page
+
 ---
 
 ## 10. Performance Characteristics
@@ -1153,16 +1257,15 @@ AI assistants invoke methods through natural language:
 
 1. **Single Assignee Model**: While GitLab supports multiple assignees, the tool enforces single assignee for simplicity in issue creation/updates
 2. **No Binary File Support**: Repository operations handle text and base64, but large binary files may cause issues
-3. **No Wiki Operations**: GitLab wiki API not yet implemented
-4. **No Group-Level Issue Operations**: Only project-scoped issue operations
-5. **No Epic Support**: GitLab premium feature not implemented
-6. **No Discussions API**: Only basic notes/comments supported
-7. **No Packages/Container Registry**: Package operations not implemented
+3. **No Group-Level Issue Operations**: Only project-scoped issue operations
+4. **No Epic Support**: GitLab premium feature not implemented
+5. **No Discussions API**: Only basic notes/comments supported
+6. **No Packages/Container Registry**: Package operations not implemented
 
 ### 13.2 Future Enhancement Opportunities
 
 1. **Multiple Assignee Support**: Extend issue/MR operations to support assignee lists
-2. **Wiki Operations**: Add wiki page CRUD operations
+2. **Wiki Attachments**: Add support for file attachments in wiki pages
 3. **Group Operations**: Extend to group-level issues and epics
 4. **Advanced Search**: Implement GitLab's advanced search API
 5. **GraphQL API**: Alternative to REST for complex queries
@@ -1305,6 +1408,20 @@ AI:
 4. Analyze error messages
 ```
 
+**Wiki Documentation Management**:
+```
+User: "Create a new wiki page about our API endpoints"
+AI:
+1. gitlab_create_wiki_page(title="API Endpoints", content="# API Endpoints\n\n...")
+2. Confirm page created successfully
+
+User: "Update the home page of our wiki"
+AI:
+1. gitlab_get_wiki_page(slug="home")
+2. Modify content based on requirements
+3. gitlab_update_wiki_page(slug="home", content=updated_content)
+```
+
 ### 17.2 API Reference Quick Links
 
 **GitLab API Documentation**:
@@ -1315,14 +1432,19 @@ AI:
 - Commits API: https://docs.gitlab.com/ee/api/commits.html
 - Pipelines API: https://docs.gitlab.com/ee/api/pipelines.html
 - Jobs API: https://docs.gitlab.com/ee/api/jobs.html
+- Wikis API: https://docs.gitlab.com/ee/api/wikis.html
 
 ### 17.3 Version History
 
-**1.8.0** (Current):
+**1.9.0** (Current):
+- Added wiki page CRUD operations
 - Complete functionality as documented
 
+**1.8.0**:
+- Previous version
+
 **Future Roadmap**:
-- Wiki operations
+- Wiki attachments support
 - Group-level issue management
 - Epic support
 - GraphQL API integration
