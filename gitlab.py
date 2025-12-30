@@ -6,7 +6,7 @@ git_url: https://github.com/LordOfTheRats/open-webui-gitlab-tool
 description: Access GitLab projects and work with issues, merge requests, repository files, diffs, CI pipelines, and wiki pages from Open WebUI. Includes optional repository write operations, CI pipeline controls, and wiki page CRUD operations. Supports compact output mode, helper lookup endpoints (labels/milestones/users/members), and basic retry/rate-limit handling.
 required_open_webui_version: 0.4.0
 requirements: httpx
-version: 1.9.0
+version: 1.9.1
 licence: MIT
 """
 
