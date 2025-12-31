@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  gitlab-flock-tool:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - GITLAB_URL=${GITLAB_URL}
+      - GITLAB_TOKEN=${GITLAB_TOKEN}
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    depends_on:
+      - ollama
+    restart: unless-stopped
+    networks:
+      - gitlab-network
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    networks:
+      - gitlab-network
+
+volumes:
+  ollama-data:
+
+networks:
+  gitlab-network:
+    driver: bridge
