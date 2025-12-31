@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  flock-gitlab:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    networks:
+      - ollama-net
+    depends_on:
+      - ollama
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - ollama-net
+    container_name: ollama
+
+networks:
+  ollama-net:
+    driver: bridge
+
+volumes:
+  ollama_data:
