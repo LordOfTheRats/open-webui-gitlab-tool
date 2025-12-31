@@ -74,10 +74,11 @@ You can override the model (and options like `temperature`) per specialist when 
 run_once(
   "Summarize the failing pipeline in acme/api",
   model_name="openai:gpt-4o",
+  temperature=0.2,
   subagent_models={
     "pipelines": {"model": "ollama:llama3", "temperature": 0.1},
     "summarizer": "openai:gpt-4o-mini",
   },
 )
 ```
-If no override is provided for a specialist, it reuses the main model.
+Top-level model options `temperature`, `top_p`, and `top_k` can be provided directly to `run_once` / `create_gitlab_agent` / CLI flags, and subagent overrides can include the same keys in their dictionaries. If no override is provided for a specialist, it reuses the main model.

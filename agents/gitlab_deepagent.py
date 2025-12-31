@@ -97,6 +97,9 @@ def create_gitlab_agent(
     *,
     model_name: Optional[str] = None,
     ollama_base_url: Optional[str] = None,
+    temperature: Optional[float] = None,
+    top_p: Optional[float] = None,
+    top_k: Optional[int] = None,
     gitlab_url: Optional[str] = None,
     gitlab_token: Optional[str] = None,
     verify_ssl: Optional[bool] = None,
@@ -115,7 +118,8 @@ def create_gitlab_agent(
     )
 
     model_id = model_name or os.getenv("GITLAB_AGENT_MODEL", "openai:gpt-4o")
-    model = _make_model(model_id, ollama_base_url)
+    model_opts = _model_options(temperature=temperature, top_p=top_p, top_k=top_k)
+    model = _make_model(model_id, ollama_base_url, **model_opts)
 
     tools = toolkit.get_tools()
     subagents = _build_subagents(
@@ -145,6 +149,9 @@ def _parse_args():
     parser = argparse.ArgumentParser(description="Run the Deepagents GitLab agent for a single message.")
     parser.add_argument("message", help="User request to send to the agent")
     parser.add_argument("--model", dest="model_name", default=None, help="LangChain model id (e.g., openai:gpt-4o)")
+    parser.add_argument("--temperature", dest="temperature", type=float, default=None, help="Model temperature override")
+    parser.add_argument("--top-p", dest="top_p", type=float, default=None, help="Model top_p override")
+    parser.add_argument("--top-k", dest="top_k", type=int, default=None, help="Model top_k override (Ollama)")
     parser.add_argument(
         "--ollama-base-url",
         dest="ollama_base_url",
@@ -172,6 +179,22 @@ def _make_model(model_name: str, ollama_base_url: Optional[str], **model_kwargs:
         return ChatOllama(model=ollama_model, base_url=base_url, **model_kwargs)
 
     return init_chat_model(model_name, **model_kwargs)
+
+
+def _model_options(
+    *,
+    temperature: Optional[float] = None,
+    top_p: Optional[float] = None,
+    top_k: Optional[int] = None,
+) -> Dict[str, Any]:
+    opts: Dict[str, Any] = {}
+    if temperature is not None:
+        opts["temperature"] = temperature
+    if top_p is not None:
+        opts["top_p"] = top_p
+    if top_k is not None:
+        opts["top_k"] = top_k
+    return opts
 
 
 def _resolve_model_for_subagent(
@@ -339,6 +362,9 @@ if __name__ == "__main__":
     result = run_once(
         args.message,
         model_name=args.model_name,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        top_k=args.top_k,
         ollama_base_url=args.ollama_base_url,
         gitlab_url=args.gitlab_url,
         gitlab_token=args.gitlab_token,

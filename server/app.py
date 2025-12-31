@@ -51,6 +51,24 @@ def _detect_hx(request: Request) -> bool:
     return request.headers.get("HX-Request", "").lower() == "true"
 
 
+def _float(value: Any) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _int(value: Any) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
 def _clean_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
     message = (raw.get("message") or "").strip()
     if not message:
@@ -65,6 +83,9 @@ def _clean_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
         "verify_ssl": _bool(raw.get("verify_ssl"), _defaults()["verify_ssl"]),
         "compact_results_default": _bool(raw.get("compact"), _defaults()["compact_results"]),
         "allow_repo_writes": _bool(raw.get("allow_writes"), _defaults()["allow_writes"]),
+        "temperature": _float(raw.get("temperature")),
+        "top_p": _float(raw.get("top_p")),
+        "top_k": _int(raw.get("top_k")),
     }
 
 
@@ -98,6 +119,9 @@ async def _invoke_agent(clean_payload: Dict[str, Any]) -> Any:
         verify_ssl=clean_payload.get("verify_ssl"),
         compact_results_default=clean_payload.get("compact_results_default"),
         allow_repo_writes=clean_payload.get("allow_repo_writes"),
+        temperature=clean_payload.get("temperature"),
+        top_p=clean_payload.get("top_p"),
+        top_k=clean_payload.get("top_k"),
     )
 
 
