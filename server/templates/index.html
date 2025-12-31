@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>GitLab Agent</title>
-  <script src="https://unpkg.com/htmx.org@1.9.12" integrity="sha384-/+mi4JivT84X1Np9Jyu1+VxDRCcIh0b07XHJPjljJdwKeLlN0hdcWHkfFBtLe6fr" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.8/dist/htmx.min.js"></script>
   <style>
     body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 0; }
     header { padding: 16px 20px; background: #111827; border-bottom: 1px solid #1f2937; }
@@ -21,6 +21,7 @@
     #result { white-space: pre-wrap; word-break: break-word; font-family: "SFMono-Regular", Menlo, Consolas, monospace; background: #0b1220; border-radius: 10px; padding: 12px; border: 1px solid #1f2937; }
     #spinner { display: none; color: #cbd5e1; }
     [hx-request][hx-trigger] #spinner { display: inline-block; }
+    .error { padding: 12px; border-radius: 10px; background: #7f1d1d; border: 1px solid #dc2626; color: #fecaca; margin: 8px 0; }
   </style>
 </head>
 <body>
@@ -89,7 +90,7 @@
 
     <div class="card">
       <div class="pill">Result</div>
-      <div id="result" class="muted">Results appear here.</div>
+      <div id="result" class="muted">Results or errors will appear here.</div>
     </div>
   </main>
 </body>

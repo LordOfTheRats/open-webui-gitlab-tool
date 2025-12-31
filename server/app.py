@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import functools
 import json
+import logging
 import os
 from html import escape
 from typing import Any, Dict, Optional
@@ -11,11 +13,28 @@ import anyio
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 
 from agents.gitlab_deepagent import run_once
 
+# Configure logging
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title="GitLab Agent Server", version="1.0.0")
 templates = Jinja2Templates(directory="server/templates")
+
+
+origins = ["*"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # -----------------
@@ -38,7 +57,7 @@ def _bool(value: Any, default: Optional[bool] = None) -> Optional[bool]:
 
 def _defaults() -> Dict[str, Any]:
     return {
-        "model": os.getenv("GITLAB_AGENT_MODEL", "openai:gpt-4o"),
+        "model": os.getenv("GITLAB_AGENT_MODEL", "ollama:gpt-4o"),
         "gitlab_url": os.getenv("GITLAB_URL", "https://gitlab.example.com"),
         "allow_writes": _bool(os.getenv("GITLAB_ALLOW_WRITES"), False),
         "compact_results": _bool(os.getenv("GITLAB_COMPACT_RESULTS"), True),
@@ -98,30 +117,88 @@ def _fmt_result(result: Any) -> str:
 
 async def _parse_request_payload(request: Request) -> Dict[str, Any]:
     content_type = request.headers.get("content-type", "").lower()
-    if "application/json" in content_type:
-        data = await request.json()
-        if not isinstance(data, dict):
-            raise HTTPException(status_code=400, detail="JSON body must be an object")
-        return _clean_payload(data)
+    logger.debug(f"_parse_request_payload: content_type={content_type}")
+    try:
+        if "application/json" in content_type:
+            data = await request.json()
+            if not isinstance(data, dict):
+                raise HTTPException(status_code=400, detail="JSON body must be an object")
+            return _clean_payload(data)
 
-    form = await request.form()
-    return _clean_payload(dict(form))
+        form = await request.form()
+        form_dict = dict(form)
+        logger.debug(f"Form data: {form_dict}")
+        return _clean_payload(form_dict)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"Error parsing request: {exc}")
+        raise HTTPException(status_code=400, detail=f"Failed to parse request: {str(exc)}")
 
 
 async def _invoke_agent(clean_payload: Dict[str, Any]) -> Any:
-    return await anyio.to_thread.run_sync(
-        run_once,
-        clean_payload["message"],
-        model_name=clean_payload.get("model_name"),
-        ollama_base_url=clean_payload.get("ollama_base_url"),
-        gitlab_url=clean_payload.get("gitlab_url"),
-        gitlab_token=clean_payload.get("gitlab_token"),
-        verify_ssl=clean_payload.get("verify_ssl"),
-        compact_results_default=clean_payload.get("compact_results_default"),
-        allow_repo_writes=clean_payload.get("allow_repo_writes"),
-        temperature=clean_payload.get("temperature"),
-        top_p=clean_payload.get("top_p"),
-        top_k=clean_payload.get("top_k"),
+    try:
+        logger.info(f"Invoking agent with message: {clean_payload['message'][:100]}")
+        
+        # Check for required GITLAB_TOKEN before invoking agent
+        if not clean_payload.get("gitlab_token") and not os.getenv("GITLAB_TOKEN"):
+            raise HTTPException(
+                status_code=400,
+                detail="GITLAB_TOKEN environment variable is required. Set it in server environment or provide gitlab_token in request."
+            )
+        
+        # Use functools.partial to wrap run_once with keyword arguments
+        run_with_args = functools.partial(
+            run_once,
+            clean_payload["message"],
+            model_name=clean_payload.get("model_name"),
+            ollama_base_url=clean_payload.get("ollama_base_url"),
+            gitlab_url=clean_payload.get("gitlab_url"),
+            gitlab_token=clean_payload.get("gitlab_token"),
+            verify_ssl=clean_payload.get("verify_ssl"),
+            compact_results_default=clean_payload.get("compact_results_default"),
+            allow_repo_writes=clean_payload.get("allow_repo_writes"),
+            temperature=clean_payload.get("temperature"),
+            top_p=clean_payload.get("top_p"),
+            top_k=clean_payload.get("top_k"),
+        )
+        
+        result = await anyio.to_thread.run_sync(run_with_args)
+        logger.info(f"Agent returned result: {str(result)[:100]}")
+        return result
+    except HTTPException:
+        raise
+    except ValueError as ve:
+        logger.exception(f"ValueError from agent: {ve}")
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as exc:
+        logger.exception(f"Error invoking agent: {exc}")
+        raise HTTPException(status_code=500, detail=f"Agent error: {str(exc)}")
+
+
+# -----------------
+# Open WebUI tool schema
+# -----------------
+
+
+class GitlabToolInput(BaseModel):
+    message: str = Field(..., description="User request for the GitLab agent")
+
+
+class GitlabToolOutput(BaseModel):
+    content: Any
+
+
+# Register exception handler for HTTPException (must be after helper functions are defined)
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    logger.error(f"HTTPException: {exc.status_code} - {exc.detail}")
+    if _detect_hx(request):
+        error_html = f'<div class="error"><strong>Error:</strong> {escape(str(exc.detail))}</div>'
+        return HTMLResponse(error_html, status_code=exc.status_code)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
     )
 
 
@@ -147,19 +224,36 @@ async def index(request: Request):
 
 @app.post("/chat")
 async def chat(request: Request):
-    payload = await _parse_request_payload(request)
+    logger.debug("POST /chat received")
+    logger.debug(f"Request method: {request.method}, content-type: {request.headers.get('content-type')}")
+    
     try:
+        payload = await _parse_request_payload(request)
+        logger.info(f"Parsed payload successfully")
         result = await _invoke_agent(payload)
+        logger.info(f"Agent invocation successful")
     except HTTPException:
+        # Let the custom exception handler deal with it
         raise
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=str(exc))
+        logger.exception(f"Unexpected exception in /chat: {exc}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(exc)}")
 
     if _detect_hx(request):
         rendered = _fmt_result(result)
-        return HTMLResponse(f"<div class=\"result\"><pre>{escape(rendered)}</pre></div>")
+        logger.debug("Returning HTML response for htmx")
+        return HTMLResponse(f"<div class=\"result\"><pre>{escape(rendered)}</pre></div>", status_code=200)
 
+    logger.debug("Returning JSON response")
     return JSONResponse({"result": result})
+
+
+# Open WebUI-compatible tool endpoint
+@app.post("/gitlab-agent", response_model=GitlabToolOutput, summary="GitLab Deepagent Tool")
+async def gitlab_tool(body: GitlabToolInput) -> GitlabToolOutput:
+    payload = _clean_payload(body.model_dump())
+    result = await _invoke_agent(payload)
+    return GitlabToolOutput(content=result)
 
 
 if __name__ == "__main__":

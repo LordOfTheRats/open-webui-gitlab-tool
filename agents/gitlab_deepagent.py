@@ -7,14 +7,9 @@ import os
 from typing import Any, Dict, List, Optional
 
 from deepagents import create_deep_agent
-from langchain.chat_models import init_chat_model
 from tools.gitlab import GitLabToolkit
 
-try:
-    # Optional import; only needed when using Ollama.
-    from langchain_ollama import ChatOllama  # type: ignore
-except ImportError:  # pragma: no cover - handled at runtime
-    ChatOllama = None  # type: ignore
+from .model_utils import make_model, model_options, resolve_model_override
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -118,8 +113,8 @@ def create_gitlab_agent(
     )
 
     model_id = model_name or os.getenv("GITLAB_AGENT_MODEL", "openai:gpt-4o")
-    model_opts = _model_options(temperature=temperature, top_p=top_p, top_k=top_k)
-    model = _make_model(model_id, ollama_base_url, **model_opts)
+    model_opts = model_options(temperature=temperature, top_p=top_p, top_k=top_k)
+    model = make_model(model_id, ollama_base_url, **model_opts)
 
     tools = toolkit.get_tools()
     subagents = _build_subagents(
@@ -165,61 +160,6 @@ def _parse_args():
     return parser.parse_args()
 
 
-def _make_model(model_name: str, ollama_base_url: Optional[str], **model_kwargs: Any):
-    """Return a LangChain chat model, supporting Ollama via the `ollama:` prefix."""
-
-    if model_name.startswith("ollama:"):
-        if ChatOllama is None:
-            raise ImportError(
-                "Install langchain-ollama to use Ollama models (pip install langchain-ollama)."
-            )
-
-        ollama_model = model_name.split("ollama:", 1)[1] or "llama3"
-        base_url = ollama_base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-        return ChatOllama(model=ollama_model, base_url=base_url, **model_kwargs)
-
-    return init_chat_model(model_name, **model_kwargs)
-
-
-def _model_options(
-    *,
-    temperature: Optional[float] = None,
-    top_p: Optional[float] = None,
-    top_k: Optional[int] = None,
-) -> Dict[str, Any]:
-    opts: Dict[str, Any] = {}
-    if temperature is not None:
-        opts["temperature"] = temperature
-    if top_p is not None:
-        opts["top_p"] = top_p
-    if top_k is not None:
-        opts["top_k"] = top_k
-    return opts
-
-
-def _resolve_model_for_subagent(
-    *,
-    base_model_name: str,
-    base_model: Any,
-    ollama_base_url: Optional[str],
-    override: Optional[Any],
-) -> Any:
-    """Resolve a model for a subagent, allowing overrides per role."""
-
-    if override is None:
-        return base_model
-
-    if isinstance(override, str):
-        return _make_model(override, ollama_base_url)
-
-    if isinstance(override, dict):
-        override_name = override.get("model") or override.get("model_name") or base_model_name
-        model_opts = {k: v for k, v in override.items() if k not in {"model", "model_name"}}
-        return _make_model(override_name, ollama_base_url, **model_opts)
-
-    return base_model
-
-
 def _tool_picker(tools: List[Any]):
     by_name = {getattr(t, "name", ""): t for t in tools}
 
@@ -242,7 +182,7 @@ def _build_subagents(
     model_overrides = model_overrides or {}
     pick = _tool_picker(tools)
 
-    model_for = lambda key: _resolve_model_for_subagent(
+    model_for = lambda key: resolve_model_override(
         base_model_name=base_model_name,
         base_model=base_model,
         ollama_base_url=ollama_base_url,
