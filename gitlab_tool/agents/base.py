@@ -2,15 +2,12 @@
 
 from typing import Generic, TypeVar
 
-from flock import Agent as FlockAgent
-from flock.core.artifacts import Artifact
-
 from gitlab_tool.client import GitLabClient, get_ollama_client
 from gitlab_tool.config import Settings
 from gitlab_tool.utils.concurrency import get_limiter
 
-InputT = TypeVar("InputT", bound=Artifact)
-OutputT = TypeVar("OutputT", bound=Artifact)
+InputT = TypeVar("InputT")
+OutputT = TypeVar("OutputT")
 
 
 class BaseGitLabAgent(Generic[InputT, OutputT]):
