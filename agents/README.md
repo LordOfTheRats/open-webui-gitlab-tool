@@ -59,3 +59,25 @@ The agent uses Deepagents defaults (todos, filesystem, sub-agents) plus a GitLab
 - Encourages quick todo planning for multi-step work (triage, reviews, planning).
 - Uses GitLabToolkit tools for issues, merge requests, pipelines, wiki, and repo operations.
 - Summarizes with concise next steps and relevant `web_url` links from tool outputs.
+
+### Coordinator + specialists
+The top-level agent now delegates to specialist sub-agents:
+- `planner`: clarifies scope and crafts a short plan.
+- `issues-and-mrs`: triages and edits issues/MRs (create/update/merge/comment).
+- `pipelines`: triages pipelines and surfaces failing job traces.
+- `repo-and-wiki`: reads files/diffs and, when writes are allowed, edits repo/wiki content.
+- `summarizer`: produces concise summaries and next steps.
+
+You can override the model (and options like `temperature`) per specialist when calling `create_gitlab_agent` or `run_once` by passing `subagent_models`, a dict keyed by specialist name. Examples:
+
+```python
+run_once(
+  "Summarize the failing pipeline in acme/api",
+  model_name="openai:gpt-4o",
+  subagent_models={
+    "pipelines": {"model": "ollama:llama3", "temperature": 0.1},
+    "summarizer": "openai:gpt-4o-mini",
+  },
+)
+```
+If no override is provided for a specialist, it reuses the main model.
