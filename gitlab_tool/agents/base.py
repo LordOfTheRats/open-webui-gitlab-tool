@@ -5,7 +5,7 @@ from typing import Generic, TypeVar
 from flock import Agent as FlockAgent
 from flock.core.artifacts import Artifact
 
-from gitlab_tool.client import GitLabClient
+from gitlab_tool.client import GitLabClient, get_ollama_client
 from gitlab_tool.config import Settings
 from gitlab_tool.utils.concurrency import get_limiter
 
@@ -29,6 +29,7 @@ class BaseGitLabAgent(Generic[InputT, OutputT]):
         self.gitlab_client = gitlab_client
         self.model = model or settings.ollama_model
         self.limiter = get_limiter()
+        self.ollama_client = get_ollama_client()
 
     async def process(self, input_artifact: InputT) -> OutputT:
         """
@@ -59,8 +60,22 @@ class BaseGitLabAgent(Generic[InputT, OutputT]):
         """
         Call Ollama LLM with prompt.
         
-        This is a placeholder - will be implemented with actual Ollama client.
+        Uses the Ollama client to generate completions.
         """
-        # TODO: Implement actual Ollama API call
-        # For now, return a placeholder
-        return f"LLM response for: {prompt[:100]}..."
+        return await self.ollama_client.generate(
+            prompt=prompt,
+            model=self.model,
+            temperature=temperature,
+        )
+
+    async def call_llm_json(self, prompt: str, temperature: float = 0.7) -> dict:
+        """
+        Call Ollama LLM and parse JSON response.
+        
+        Ensures the response is valid JSON.
+        """
+        return await self.ollama_client.generate_json(
+            prompt=prompt,
+            model=self.model,
+            temperature=temperature,
+        )

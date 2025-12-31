@@ -7,16 +7,27 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from gitlab_tool.agents import IssueSummarizationAgent, PipelineTriageAgent
+from gitlab_tool.agents import (
+    CodeReviewAgent,
+    IssueSummarizationAgent,
+    MergeRequestSummarizationAgent,
+    PipelineTriageAgent,
+    RepositoryOperationsAgent,
+)
 from gitlab_tool.artifacts import (
     ApprovalResponse,
+    CodeReview,
+    GetFileRequest,
     IssueSummary,
     ListProjectsRequest,
+    MergeRequestSummary,
     PipelineAnalysis,
+    ReviewMergeRequestRequest,
     SummarizeIssueRequest,
+    SummarizeMergeRequestRequest,
     TriagePipelineRequest,
 )
-from gitlab_tool.client import GitLabClient
+from gitlab_tool.client import GitLabClient, get_ollama_client
 from gitlab_tool.config import get_settings
 from gitlab_tool.utils import get_approval_manager, get_limiter
 
@@ -45,6 +56,15 @@ async def lifespan(app: FastAPI):
     logger.info(f"GitLab URL: {settings.gitlab_url}")
     logger.info(f"Ollama URL: {settings.ollama_base_url}")
     logger.info(f"Max concurrent requests: {settings.max_concurrent_requests}")
+    
+    # Check Ollama health
+    try:
+        ollama_client = get_ollama_client()
+        await ollama_client.health_check()
+        logger.info(f"Ollama health check passed (model: {settings.ollama_model})")
+    except Exception as e:
+        logger.warning(f"Ollama health check failed: {e}")
+        logger.warning("Server will start but LLM features may not work")
     
     yield
     
@@ -76,11 +96,21 @@ async def health_check():
     settings = get_settings()
     limiter = get_limiter()
     
+    # Check Ollama
+    ollama_status = "unknown"
+    try:
+        ollama_client = get_ollama_client()
+        await ollama_client.health_check()
+        ollama_status = "healthy"
+    except Exception as e:
+        ollama_status = f"unhealthy: {str(e)[:100]}"
+    
     return {
         "status": "healthy",
         "version": "2.0.0",
         "gitlab_url": settings.gitlab_url,
         "ollama_url": settings.ollama_base_url,
+        "ollama_status": ollama_status,
         "concurrency": {
             "max": limiter.max_concurrent,
             "available": limiter.available,
@@ -136,6 +166,52 @@ async def summarize_issue(request: SummarizeIssueRequest):
         )
 
 
+# Summarize merge request endpoint
+@app.post("/merge-requests/summarize", response_model=MergeRequestSummary, tags=["Merge Requests"])
+async def summarize_merge_request(request: SummarizeMergeRequestRequest):
+    """Summarize a GitLab merge request using AI agent."""
+    try:
+        settings = get_settings()
+        client = GitLabClient(settings)
+        
+        agent = MergeRequestSummarizationAgent(
+            settings=settings,
+            gitlab_client=client,
+        )
+        
+        summary = await agent.invoke(request)
+        return summary
+    except Exception as e:
+        logger.error(f"Error summarizing MR: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
+
+
+# Review merge request endpoint
+@app.post("/merge-requests/review", response_model=CodeReview, tags=["Merge Requests"])
+async def review_merge_request(request: ReviewMergeRequestRequest):
+    """Perform automated code review on a merge request."""
+    try:
+        settings = get_settings()
+        client = GitLabClient(settings)
+        
+        agent = CodeReviewAgent(
+            settings=settings,
+            gitlab_client=client,
+        )
+        
+        review = await agent.invoke(request)
+        return review
+    except Exception as e:
+        logger.error(f"Error reviewing MR: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
+
+
 # Triage pipeline endpoint
 @app.post("/pipelines/triage", response_model=PipelineAnalysis, tags=["Pipelines"])
 async def triage_pipeline(request: TriagePipelineRequest):
@@ -154,6 +230,29 @@ async def triage_pipeline(request: TriagePipelineRequest):
         return analysis
     except Exception as e:
         logger.error(f"Error triaging pipeline: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
+
+
+# Get repository file endpoint
+@app.post("/repository/files/get", response_model=dict, tags=["Repository"])
+async def get_repository_file(request: GetFileRequest):
+    """Get a file from repository."""
+    try:
+        settings = get_settings()
+        client = GitLabClient(settings)
+        
+        agent = RepositoryOperationsAgent(
+            settings=settings,
+            gitlab_client=client,
+        )
+        
+        result = await agent.invoke(request)
+        return result
+    except Exception as e:
+        logger.error(f"Error getting file: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),

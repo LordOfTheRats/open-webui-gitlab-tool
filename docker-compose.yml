@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  gitlab-tool:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # GitLab Configuration
+      - GITLAB_URL=${GITLAB_URL:-https://gitlab.example.com}
+      - GITLAB_TOKEN=${GITLAB_TOKEN}
+      - GITLAB_VERIFY_SSL=${GITLAB_VERIFY_SSL:-true}
+      
+      # Ollama Configuration
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:latest}
+      
+      # Server Configuration
+      - MAX_CONCURRENT_REQUESTS=${MAX_CONCURRENT_REQUESTS:-2}
+      - REQUIRE_APPROVAL_FOR_WRITES=${REQUIRE_APPROVAL_FOR_WRITES:-true}
+    
+    volumes:
+      - ./data:/app/data
+    
+    depends_on:
+      - ollama
+    
+    restart: unless-stopped
+    
+    networks:
+      - gitlab-network
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    networks:
+      - gitlab-network
+
+volumes:
+  ollama-data:
+
+networks:
+  gitlab-network:
+    driver: bridge
