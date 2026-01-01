@@ -21,7 +21,6 @@ from ..models import (
 from .common import (
     _gitlab_error_to_message,
     _maybe_compact,
-    _project_id_or_path,
     _run_async,
 )
 
@@ -82,8 +81,6 @@ class ListMergeRequestsTool(BaseTool):
     ) -> str:
         """List merge requests (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _list_mrs():
                 mrs = []
                 for page in range(offset + 1, offset + page_count + 1):
@@ -100,7 +97,7 @@ class ListMergeRequestsTool(BaseTool):
                     if search:
                         params["search"] = search
 
-                    page_mrs = self.gitlab.projects.get(pid).mergerequests.list(
+                    page_mrs = self.gitlab.projects.get(project).mergerequests.list(
                         as_list=False, **params
                     )
                     for mr in page_mrs:
@@ -155,10 +152,8 @@ class GetMergeRequestTool(BaseTool):
     ) -> str:
         """Get merge request (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _get_mr():
-                mr = self.gitlab.projects.get(pid).mergerequests.get(mr_iid)
+                mr = self.gitlab.projects.get(project).mergerequests.get(mr_iid)
                 return mr.asdict()
 
             mr_data = await _run_async(_get_mr)
@@ -230,8 +225,6 @@ class CreateMergeRequestTool(BaseTool):
     ) -> str:
         """Create merge request (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _create_mr():
                 data = {
                     "source_branch": source_branch,
@@ -247,7 +240,7 @@ class CreateMergeRequestTool(BaseTool):
                 if draft:
                     data["draft"] = draft
 
-                mr = self.gitlab.projects.get(pid).mergerequests.create(data)
+                mr = self.gitlab.projects.get(project).mergerequests.create(data)
                 return mr.asdict()
 
             mr_data = await _run_async(_create_mr)
@@ -294,10 +287,8 @@ class ApproveMergeRequestTool(BaseTool):
     ) -> str:
         """Approve merge request (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _approve():
-                mr = self.gitlab.projects.get(pid).mergerequests.get(mr_iid)
+                mr = self.gitlab.projects.get(project).mergerequests.get(mr_iid)
                 mr.approve()
                 return mr.asdict()
 
@@ -362,10 +353,8 @@ class MergeMergeRequestTool(BaseTool):
     ) -> str:
         """Merge merge request (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _merge():
-                mr = self.gitlab.projects.get(pid).mergerequests.get(mr_iid)
+                mr = self.gitlab.projects.get(project).mergerequests.get(mr_iid)
                 opts = {}
                 if merge_commit_message:
                     opts["merge_commit_message"] = merge_commit_message
@@ -423,10 +412,8 @@ class AddMergeRequestNoteTool(BaseTool):
     ) -> str:
         """Add MR note (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _add_note():
-                mr = self.gitlab.projects.get(pid).mergerequests.get(mr_iid)
+                mr = self.gitlab.projects.get(project).mergerequests.get(mr_iid)
                 note = mr.notes.create({"body": body})
                 return note.asdict()
 
@@ -485,8 +472,6 @@ class ListMergeRequestNotesTool(BaseTool):
     ) -> str:
         """List MR notes (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _list_notes():
                 notes = []
                 for page in range(offset + 1, offset + page_count + 1):
@@ -495,7 +480,7 @@ class ListMergeRequestNotesTool(BaseTool):
                         "page": page,
                         "per_page": 20,
                     }
-                    mr = self.gitlab.projects.get(pid).mergerequests.get(mr_iid)
+                    mr = self.gitlab.projects.get(project).mergerequests.get(mr_iid)
                     page_notes = mr.notes.list(as_list=False, **params)
                     for note in page_notes:
                         notes.append(note.asdict())

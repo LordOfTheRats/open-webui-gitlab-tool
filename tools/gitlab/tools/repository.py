@@ -22,7 +22,6 @@ from ..models import (
 )
 from .common import (
     _gitlab_error_to_message,
-    _project_id_or_path,
     _run_async,
 )
 
@@ -76,7 +75,7 @@ class ListRepositoryTreeTool(BaseTool):
     ) -> str:
         """List repository tree (async)."""
         try:
-            pid = _project_id_or_path(project)
+            
 
             def _list_tree():
                 items = []
@@ -89,7 +88,7 @@ class ListRepositoryTreeTool(BaseTool):
                     if ref:
                         params["ref"] = ref
 
-                    tree = self.gitlab.projects.get(pid).repository_tree(
+                    tree = self.gitlab.projects.get(project).repository_tree(
                         path=path, **params
                     )
                     for item in tree:
@@ -141,10 +140,10 @@ class GetFileTool(BaseTool):
     ) -> str:
         """Get file (async)."""
         try:
-            pid = _project_id_or_path(project)
+            
 
             def _get_file():
-                f = self.gitlab.projects.get(pid).files.get(
+                f = self.gitlab.projects.get(project).files.get(
                     file_path, ref=ref
                 )
                 result = {
@@ -209,10 +208,10 @@ class GetRawFileTool(BaseTool):
     ) -> str:
         """Get raw file (async)."""
         try:
-            pid = _project_id_or_path(project)
+            
 
             def _get_raw_file():
-                content = self.gitlab.projects.get(pid).files.raw(
+                content = self.gitlab.projects.get(project).files.raw(
                     file_path, ref=ref
                 )
                 # Content is already bytes, decode to string
@@ -271,10 +270,10 @@ class CompareRefsTool(BaseTool):
     ) -> str:
         """Compare refs (async)."""
         try:
-            pid = _project_id_or_path(project)
+            
 
             def _compare():
-                comparison = self.gitlab.projects.get(pid).repository_compare(
+                comparison = self.gitlab.projects.get(project).repository_compare(
                     from_ref, to_ref, straight=straight
                 )
                 return comparison
@@ -349,7 +348,7 @@ class CreateOrUpdateFileTool(BaseTool):
             )
 
         try:
-            pid = _project_id_or_path(project)
+            
 
             def _create_or_update():
                 data = {
@@ -366,7 +365,7 @@ class CreateOrUpdateFileTool(BaseTool):
 
                 try:
                     # Try to get existing file first
-                    f = self.gitlab.projects.get(pid).files.get(file_path, ref=branch)
+                    f = self.gitlab.projects.get(project).files.get(file_path, ref=branch)
                     f.content = content
                     f.commit_message = commit_message
                     if encoding:
@@ -377,7 +376,7 @@ class CreateOrUpdateFileTool(BaseTool):
                     return f.asdict()
                 except gitlab.exceptions.GitlabGetError:
                     # File doesn't exist, create it
-                    f = self.gitlab.projects.get(pid).files.create(
+                    f = self.gitlab.projects.get(project).files.create(
                         file_path, data
                     )
                     return f.asdict()
@@ -442,10 +441,10 @@ class DeleteFileTool(BaseTool):
             )
 
         try:
-            pid = _project_id_or_path(project)
+            
 
             def _delete():
-                f = self.gitlab.projects.get(pid).files.get(file_path, ref=branch)
+                f = self.gitlab.projects.get(project).files.get(file_path, ref=branch)
                 f.delete(branch=branch, commit_message=commit_message)
                 return f"File {file_path} deleted from {branch}"
 
@@ -512,10 +511,10 @@ class MoveFileTool(BaseTool):
             )
 
         try:
-            pid = _project_id_or_path(project)
+            
 
             def _move():
-                f = self.gitlab.projects.get(pid).files.get(previous_path, ref=branch)
+                f = self.gitlab.projects.get(project).files.get(previous_path, ref=branch)
                 f.file_path = file_path
                 f.save(branch=branch, commit_message=commit_message)
                 return f.asdict()
@@ -584,10 +583,10 @@ class ChmodFileTool(BaseTool):
             )
 
         try:
-            pid = _project_id_or_path(project)
+            
 
             def _chmod():
-                f = self.gitlab.projects.get(pid).files.get(file_path, ref=branch)
+                f = self.gitlab.projects.get(project).files.get(file_path, ref=branch)
                 f.execute_filemode = execute_filemode
                 f.save(branch=branch, commit_message=commit_message)
                 return f.asdict()

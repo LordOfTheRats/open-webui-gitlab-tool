@@ -13,7 +13,6 @@ from ..models import GetProjectInput, ListProjectsInput
 from .common import (
     _gitlab_error_to_message,
     _maybe_compact,
-    _project_id_or_path,
     _run_async,
 )
 
@@ -142,10 +141,8 @@ class GetProjectTool(BaseTool):
     ) -> str:
         """Get project (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _get_project():
-                proj = self.gitlab.projects.get(pid)
+                proj = self.gitlab.projects.get(project)
                 return proj.asdict()
 
             proj_data = await _run_async(_get_project)

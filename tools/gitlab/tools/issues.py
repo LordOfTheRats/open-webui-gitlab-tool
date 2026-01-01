@@ -21,7 +21,6 @@ from ..models import (
 from .common import (
     _gitlab_error_to_message,
     _maybe_compact,
-    _project_id_or_path,
     _run_async,
 )
 
@@ -82,8 +81,6 @@ class ListIssuesTool(BaseTool):
     ) -> str:
         """List issues (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _list_issues():
                 issues = []
                 for page in range(offset + 1, offset + page_count + 1):
@@ -101,7 +98,7 @@ class ListIssuesTool(BaseTool):
                         params["search"] = search
 
                     page_issues = self.gitlab.projects.get(
-                        pid
+                        project
                     ).issues.list(as_list=False, **params)
                     for issue in page_issues:
                         issues.append(issue.asdict())
@@ -155,10 +152,8 @@ class GetIssueTool(BaseTool):
     ) -> str:
         """Get issue (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _get_issue():
-                issue = self.gitlab.projects.get(pid).issues.get(issue_iid)
+                issue = self.gitlab.projects.get(project).issues.get(issue_iid)
                 return issue.asdict()
 
             issue_data = await _run_async(_get_issue)
@@ -227,8 +222,6 @@ class CreateIssueTool(BaseTool):
     ) -> str:
         """Create issue (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _create_issue():
                 data = {"title": title}
                 if description:
@@ -242,7 +235,7 @@ class CreateIssueTool(BaseTool):
                 if due_date:
                     data["due_date"] = due_date
 
-                issue = self.gitlab.projects.get(pid).issues.create(data)
+                issue = self.gitlab.projects.get(project).issues.create(data)
                 return issue.asdict()
 
             issue_data = await _run_async(_create_issue)
@@ -320,10 +313,8 @@ class UpdateIssueTool(BaseTool):
     ) -> str:
         """Update issue (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _update_issue():
-                issue = self.gitlab.projects.get(pid).issues.get(issue_iid)
+                issue = self.gitlab.projects.get(project).issues.get(issue_iid)
                 if title is not None:
                     issue.title = title
                 if description is not None:
@@ -391,10 +382,8 @@ class CloseIssueTool(BaseTool):
     ) -> str:
         """Close issue (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _close_issue():
-                issue = self.gitlab.projects.get(pid).issues.get(issue_iid)
+                issue = self.gitlab.projects.get(project).issues.get(issue_iid)
                 issue.state_event = "close"
                 issue.save()
                 return issue.asdict()
@@ -442,10 +431,8 @@ class AddIssueNoteTool(BaseTool):
     ) -> str:
         """Add issue note (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _add_note():
-                issue = self.gitlab.projects.get(pid).issues.get(issue_iid)
+                issue = self.gitlab.projects.get(project).issues.get(issue_iid)
                 note = issue.notes.create({"body": body})
                 return note.asdict()
 
@@ -504,8 +491,6 @@ class ListIssueNotesTool(BaseTool):
     ) -> str:
         """List issue notes (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _list_notes():
                 notes = []
                 for page in range(offset + 1, offset + page_count + 1):
@@ -514,7 +499,7 @@ class ListIssueNotesTool(BaseTool):
                         "page": page,
                         "per_page": 20,
                     }
-                    issue = self.gitlab.projects.get(pid).issues.get(issue_iid)
+                    issue = self.gitlab.projects.get(project).issues.get(issue_iid)
                     page_notes = issue.notes.list(as_list=False, **params)
                     for note in page_notes:
                         notes.append(note.asdict())

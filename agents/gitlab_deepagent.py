@@ -127,9 +127,10 @@ def create_gitlab_agent(
 
     return create_deep_agent(
         model=model,
-        tools=tools,
+        #tools=tools,
         system_prompt=SYSTEM_PROMPT,
         subagents=subagents,
+        debug=True,
     )
 
 

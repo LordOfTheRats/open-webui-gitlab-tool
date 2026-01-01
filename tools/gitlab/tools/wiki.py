@@ -19,7 +19,6 @@ from ..models import (
 from .common import (
     _gitlab_error_to_message,
     _maybe_compact,
-    _project_id_or_path,
     _run_async,
 )
 
@@ -71,7 +70,7 @@ class ListWikiPagesTool(BaseTool):
     ) -> str:
         """List wiki pages (async)."""
         try:
-            pid = _project_id_or_path(project)
+            
 
             def _list_pages():
                 pages = []
@@ -81,7 +80,7 @@ class ListWikiPagesTool(BaseTool):
                         "page": page_num,
                         "per_page": 20,
                     }
-                    page_list = self.gitlab.projects.get(pid).wikis.list(
+                    page_list = self.gitlab.projects.get(project).wikis.list(
                         as_list=False, **params
                     )
                     for wiki_page in page_list:
@@ -146,7 +145,7 @@ class GetWikiPageTool(BaseTool):
     ) -> str:
         """Get wiki page (async)."""
         try:
-            pid = _project_id_or_path(project)
+            
 
             def _get_page():
                 params = {}
@@ -155,7 +154,7 @@ class GetWikiPageTool(BaseTool):
                 if render_html:
                     params["render_html"] = render_html
 
-                page = self.gitlab.projects.get(pid).wikis.get(slug, **params)
+                page = self.gitlab.projects.get(project).wikis.get(slug, **params)
                 return page.asdict()
 
             page_data = await _run_async(_get_page)
@@ -215,7 +214,7 @@ class CreateWikiPageTool(BaseTool):
     ) -> str:
         """Create wiki page (async)."""
         try:
-            pid = _project_id_or_path(project)
+            
 
             def _create_page():
                 data = {
@@ -225,7 +224,7 @@ class CreateWikiPageTool(BaseTool):
                 if format:
                     data["format"] = format
 
-                page = self.gitlab.projects.get(pid).wikis.create(data)
+                page = self.gitlab.projects.get(project).wikis.create(data)
                 return page.asdict()
 
             page_data = await _run_async(_create_page)
@@ -288,10 +287,10 @@ class UpdateWikiPageTool(BaseTool):
     ) -> str:
         """Update wiki page (async)."""
         try:
-            pid = _project_id_or_path(project)
+            
 
             def _update_page():
-                page = self.gitlab.projects.get(pid).wikis.get(slug)
+                page = self.gitlab.projects.get(project).wikis.get(slug)
                 if title is not None:
                     page.title = title
                 if content is not None:
@@ -340,10 +339,10 @@ class DeleteWikiPageTool(BaseTool):
     ) -> str:
         """Delete wiki page (async)."""
         try:
-            pid = _project_id_or_path(project)
+            
 
             def _delete_page():
-                page = self.gitlab.projects.get(pid).wikis.get(slug)
+                page = self.gitlab.projects.get(project).wikis.get(slug)
                 page.delete()
                 return f"Wiki page '{slug}' deleted successfully"
 

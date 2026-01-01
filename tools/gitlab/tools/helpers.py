@@ -18,7 +18,6 @@ from ..models import (
 from .common import (
     _gitlab_error_to_message,
     _maybe_compact,
-    _project_id_or_path,
     _run_async,
 )
 
@@ -152,8 +151,6 @@ class ListLabelsTool(BaseTool):
     ) -> str:
         """List labels (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _list_labels():
                 labels = []
                 for page in range(offset + 1, offset + page_count + 1):
@@ -166,7 +163,7 @@ class ListLabelsTool(BaseTool):
                     if search:
                         params["search"] = search
 
-                    page_labels = self.gitlab.projects.get(pid).labels.list(
+                    page_labels = self.gitlab.projects.get(project).labels.list(
                         as_list=False, **params
                     )
                     for label in page_labels:
@@ -234,8 +231,6 @@ class ListMilestonesTool(BaseTool):
     ) -> str:
         """List milestones (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _list_milestones():
                 milestones = []
                 for page in range(offset + 1, offset + page_count + 1):
@@ -249,7 +244,7 @@ class ListMilestonesTool(BaseTool):
                         params["search"] = search
 
                     page_milestones = self.gitlab.projects.get(
-                        pid
+                        project
                     ).milestones.list(as_list=False, **params)
                     for milestone in page_milestones:
                         milestones.append(milestone.asdict())
@@ -316,8 +311,6 @@ class ListProjectMembersTool(BaseTool):
     ) -> str:
         """List project members (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _list_members():
                 members = []
                 for page in range(offset + 1, offset + page_count + 1):
@@ -336,12 +329,12 @@ class ListProjectMembersTool(BaseTool):
 
                     if endpoint == "all":
                         page_members = (
-                            self.gitlab.projects.get(pid)
+                            self.gitlab.projects.get(project)
                             .members_all.list(as_list=False, **params)
                         )
                     else:
                         page_members = (
-                            self.gitlab.projects.get(pid)
+                            self.gitlab.projects.get(project)
                             .members.list(as_list=False, **params)
                         )
 

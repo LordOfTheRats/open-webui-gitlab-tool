@@ -12,31 +12,6 @@ import gitlab
 T = TypeVar("T")
 
 
-def _encode_path(value: str) -> str:
-    """Encode a path-like string so slashes become %2F (required by GitLab)."""
-    return quote_plus(value, safe="").replace("+", "%20")
-
-
-def _project_id_or_path(project: int | str) -> str:
-    """Convert project reference to API format.
-    
-    GitLab endpoints use /projects/:id where :id can be numeric ID or URL-encoded path.
-    """
-    if isinstance(project, int):
-        return str(project)
-    return _encode_path(project)
-
-
-def _group_id_or_path(group: int | str) -> str:
-    """Convert group reference to API format.
-    
-    GitLab group endpoints use /groups/:id where :id can be numeric ID or URL-encoded full path.
-    """
-    if isinstance(group, int):
-        return str(group)
-    return _encode_path(group)
-
-
 def _user_brief(u: Any) -> Optional[dict[str, Any]]:
     """Extract brief user info."""
     if not isinstance(u, dict):

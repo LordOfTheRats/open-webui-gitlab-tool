@@ -21,7 +21,6 @@ from ..models import (
 from .common import (
     _gitlab_error_to_message,
     _maybe_compact,
-    _project_id_or_path,
     _run_async,
 )
 
@@ -76,8 +75,6 @@ class ListPipelinesTool(BaseTool):
     ) -> str:
         """List pipelines (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _list_pipelines():
                 pipelines = []
                 for page in range(offset + 1, offset + page_count + 1):
@@ -90,7 +87,7 @@ class ListPipelinesTool(BaseTool):
                     if status:
                         params["status"] = status
 
-                    page_pipelines = self.gitlab.projects.get(pid).pipelines.list(
+                    page_pipelines = self.gitlab.projects.get(project).pipelines.list(
                         as_list=False, **params
                     )
                     for pipeline in page_pipelines:
@@ -144,10 +141,10 @@ class GetPipelineTool(BaseTool):
     ) -> str:
         """Get pipeline (async)."""
         try:
-            pid = _project_id_or_path(project)
+            
 
             def _get_pipeline():
-                pipeline = self.gitlab.projects.get(pid).pipelines.get(pipeline_id)
+                pipeline = self.gitlab.projects.get(project).pipelines.get(pipeline_id)
                 return pipeline.asdict()
 
             pipeline_data = await _run_async(_get_pipeline)
@@ -210,8 +207,6 @@ class ListPipelineJobsTool(BaseTool):
     ) -> str:
         """List pipeline jobs (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _list_jobs():
                 jobs = []
                 for page in range(offset + 1, offset + page_count + 1):
@@ -222,7 +217,7 @@ class ListPipelineJobsTool(BaseTool):
                     if scope:
                         params["scope"] = scope
 
-                    pipeline = self.gitlab.projects.get(pid).pipelines.get(pipeline_id)
+                    pipeline = self.gitlab.projects.get(project).pipelines.get(pipeline_id)
                     page_jobs = pipeline.jobs.list(as_list=False, **params)
                     for job in page_jobs:
                         jobs.append(job.asdict())
@@ -272,10 +267,10 @@ class GetJobTraceTool(BaseTool):
     ) -> str:
         """Get job trace (async)."""
         try:
-            pid = _project_id_or_path(project)
+            
 
             def _get_trace():
-                job = self.gitlab.projects.get(pid).jobs.get(job_id)
+                job = self.gitlab.projects.get(project).jobs.get(job_id)
                 trace = job.trace()
                 # Trace is bytes, decode to string
                 if isinstance(trace, bytes):
@@ -334,14 +329,12 @@ class RunPipelineTool(BaseTool):
     ) -> str:
         """Run pipeline (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _run_pipeline():
                 data = {"ref": ref}
                 if variables:
                     data["variables"] = variables
 
-                pipeline = self.gitlab.projects.get(pid).pipelines.create(data)
+                pipeline = self.gitlab.projects.get(project).pipelines.create(data)
                 return pipeline.asdict()
 
             pipeline_data = await _run_async(_run_pipeline)
@@ -391,10 +384,8 @@ class RetryJobTool(BaseTool):
     ) -> str:
         """Retry job (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _retry():
-                job = self.gitlab.projects.get(pid).jobs.get(job_id)
+                job = self.gitlab.projects.get(project).jobs.get(job_id)
                 job.retry()
                 return job.asdict()
 
@@ -444,10 +435,8 @@ class CancelJobTool(BaseTool):
     ) -> str:
         """Cancel job (async)."""
         try:
-            pid = _project_id_or_path(project)
-
             def _cancel():
-                job = self.gitlab.projects.get(pid).jobs.get(job_id)
+                job = self.gitlab.projects.get(project).jobs.get(job_id)
                 job.cancel()
                 return job.asdict()
 
